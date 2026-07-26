@@ -1,0 +1,363 @@
+From 8c9e50d99bee47ebb5d67adf53b291307a389370 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Sun, 26 Jul 2026 21:01:14 +0200
+Subject: [PATCH 1/9] Create MEHDORA standalone textile distribution
+
+---
+ krita/CMakeLists.txt                          |   4 +-
+ krita/main.cc                                 |   6 +-
+ krita/org.kde.krita.desktop                   |   6 +-
+ krita/versioninfo.rc.in                       |   8 +-
+ plugins/python/CMakeLists.txt                 |   1 +
+ .../mehdora_textile/mehdora_textile.desktop   |   8 +
+ .../mehdora_textile/Manual.html               |   9 +
+ .../mehdora_textile/__init__.py               |   1 +
+ .../mehdora_textile/mehdora_textile.py        | 189 ++++++++++++++++++
+ 9 files changed, 220 insertions(+), 12 deletions(-)
+ create mode 100644 plugins/python/mehdora_textile/mehdora_textile.desktop
+ create mode 100644 plugins/python/mehdora_textile/mehdora_textile/Manual.html
+ create mode 100644 plugins/python/mehdora_textile/mehdora_textile/__init__.py
+ create mode 100644 plugins/python/mehdora_textile/mehdora_textile/mehdora_textile.py
+
+diff --git a/krita/CMakeLists.txt b/krita/CMakeLists.txt
+index 52f69ea..21bad24 100644
+--- a/krita/CMakeLists.txt
++++ b/krita/CMakeLists.txt
+@@ -264,7 +264,7 @@ if (WIN32)
+     endif()
+     set_target_properties(krita_windows_stub_exe
+         PROPERTIES
+-            OUTPUT_NAME "krita"
++            OUTPUT_NAME "MEHDORA-Textile-Studio"
+     )
+     if (MSVC)
+         target_link_options(krita_windows_stub_exe PRIVATE "/DEBUG:NONE")
+@@ -280,7 +280,7 @@ if (WIN32)
+     set_target_properties(krita_windows_stub_com
+         PROPERTIES
+             WIN32_EXECUTABLE false
+-            OUTPUT_NAME "krita"
++            OUTPUT_NAME "MEHDORA-Textile-Studio"
+             SUFFIX ".com"
+     )
+     if (MSVC)
+diff --git a/krita/main.cc b/krita/main.cc
+index dd8b580..b461ace 100644
+--- a/krita/main.cc
++++ b/krita/main.cc
+@@ -716,11 +716,11 @@ if (!qEnvironmentVariableIsEmpty("KRITA_OPENGL_DEBUG")) {
+     /// Initialize application info, it will be used by both, Qt and
+     /// DrKonqi of the host system
+     KAboutData aboutData("krita",
+-                            "Krita",
++                            "MEHDORA Textile Studio",
+                             KritaVersionWrapper::versionString(true),
+-                            "", // TODO: "short description" needs new string exception
++                            "Professional textile design and colorway studio",
+                             KAboutLicense::GPL,
+-                            i18nc("@info:credit", "© 1999–2026 The Krita Developers"));
++                            i18nc("@info:credit", "MEHDORA Textile Studio — powered by Krita. © 1999–2026 The Krita Developers"));
+     aboutData.setHomepage(QStringLiteral("https://krita.org"));
+     aboutData.setOrganizationDomain("krita.org");
+ 
+diff --git a/krita/org.kde.krita.desktop b/krita/org.kde.krita.desktop
+index 453502e..ff153c8 100644
+--- a/krita/org.kde.krita.desktop
++++ b/krita/org.kde.krita.desktop
+@@ -1,5 +1,5 @@
+ [Desktop Entry]
+-Name=Krita
++Name=MEHDORA Textile Studio
+ Name[af]=Krita
+ Name[ar]=كريتا
+ Name[bg]=Krita
+@@ -63,7 +63,7 @@ Name[wa]=Krita
+ Name[xh]=Krita
+ Name[zh_CN]=Krita
+ Name[zh_TW]=Krita
+-Exec=krita %F
++Exec=MEHDORA-Textile-Studio %F
+ GenericName=Digital Painting
+ GenericName[ar]=رسم رقمي
+ GenericName[bs]=Digitalno Bojenje
+@@ -164,6 +164,6 @@ X-KDE-NativeMimeType=application/x-krita
+ X-KDE-ExtraNativeMimeTypes=
+ StartupNotify=true
+ X-Krita-Version=28
+-StartupWMClass=krita
++StartupWMClass=MEHDORA-Textile-Studio
+ # Always be the preferred handler for .kra files
+ InitialPreference=99
+diff --git a/krita/versioninfo.rc.in b/krita/versioninfo.rc.in
+index 90e03a3..41723d9 100644
+--- a/krita/versioninfo.rc.in
++++ b/krita/versioninfo.rc.in
+@@ -38,7 +38,7 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+ #define KRITA_PRODUCT_VERSION KRITA_FILE_VERSION
+ #define KRITA_PRODUCT_VERSION_STR KRITA_FILE_VERSION_STR
+ 
+-#define KRITA_DESCRIPTION_STR "Krita digital painting application"
++#define KRITA_DESCRIPTION_STR "MEHDORA professional textile design application"
+ #define KRITA_FOUNDATION_STR "Krita Foundation"
+ 
+ 
+@@ -66,10 +66,10 @@ BEGIN
+             VALUE "CompanyName", KRITA_FOUNDATION_STR
+             VALUE "FileDescription", KRITA_DESCRIPTION_STR
+             VALUE "FileVersion", KRITA_FILE_VERSION_STR
+-            VALUE "InternalName", "krita"
++            VALUE "InternalName", "MEHDORA Textile Studio"
+             VALUE "LegalCopyright", KRITA_FOUNDATION_STR
+-            VALUE "OriginalFilename", "krita.exe"
+-            VALUE "ProductName", "Krita"
++            VALUE "OriginalFilename", "MEHDORA-Textile-Studio.exe"
++            VALUE "ProductName", "MEHDORA Textile Studio"
+             VALUE "ProductVersion", KRITA_PRODUCT_VERSION_STR
+         END
+     END
+diff --git a/plugins/python/CMakeLists.txt b/plugins/python/CMakeLists.txt
+index 4260fa1..0f2086f 100644
+--- a/plugins/python/CMakeLists.txt
++++ b/plugins/python/CMakeLists.txt
+@@ -80,6 +80,7 @@ install_pykrita_plugin(mutator)
+ install_pykrita_plugin(channels2layers)
+ install_pykrita_plugin(photobash_images)
+ install_pykrita_plugin(workflow_buttons)
++install_pykrita_plugin(mehdora_textile)
+ 
+ # if(PYTHON_VERSION_MAJOR VERSION_EQUAL 3)
+ #     install_pykrita_plugin(cmake_utils)
+diff --git a/plugins/python/mehdora_textile/mehdora_textile.desktop b/plugins/python/mehdora_textile/mehdora_textile.desktop
+new file mode 100644
+index 0000000..47c82b8
+--- /dev/null
++++ b/plugins/python/mehdora_textile/mehdora_textile.desktop
+@@ -0,0 +1,8 @@
++[Desktop Entry]
++Type=Service
++ServiceTypes=Krita/PythonPlugin
++X-KDE-Library=mehdora_textile
++X-Python-2-Compatible=false
++X-Krita-Manual=Manual.html
++Name=MEHDORA Textile Workspace
++Comment=Built-in textile design, repeat and colorway workspace
+diff --git a/plugins/python/mehdora_textile/mehdora_textile/Manual.html b/plugins/python/mehdora_textile/mehdora_textile/Manual.html
+new file mode 100644
+index 0000000..1403ddc
+--- /dev/null
++++ b/plugins/python/mehdora_textile/mehdora_textile/Manual.html
+@@ -0,0 +1,9 @@
++<!doctype html>
++<html lang="fa" dir="rtl">
++<meta charset="utf-8">
++<title>MEHDORA Textile Workspace</title>
++<body>
++<h1>فضای کاری پارچه MEHDORA</h1>
++<p>ابزارهای تکرار زنده، مدیریت لایه‌ها و ساخت رنگ‌بندی داخل نسخه مستقل MEHDORA قرار گرفته‌اند.</p>
++</body>
++</html>
+diff --git a/plugins/python/mehdora_textile/mehdora_textile/__init__.py b/plugins/python/mehdora_textile/mehdora_textile/__init__.py
+new file mode 100644
+index 0000000..3d0f155
+--- /dev/null
++++ b/plugins/python/mehdora_textile/mehdora_textile/__init__.py
+@@ -0,0 +1 @@
++from .mehdora_textile import *
+diff --git a/plugins/python/mehdora_textile/mehdora_textile/mehdora_textile.py b/plugins/python/mehdora_textile/mehdora_textile/mehdora_textile.py
+new file mode 100644
+index 0000000..9634b07
+--- /dev/null
++++ b/plugins/python/mehdora_textile/mehdora_textile/mehdora_textile.py
+@@ -0,0 +1,189 @@
++from krita import Krita, DockWidget, DockWidgetFactory, DockWidgetFactoryBase
++try:
++    from PyQt6.QtCore import Qt
++    from PyQt6.QtWidgets import (
++        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGroupBox,
++        QTreeWidget, QTreeWidgetItem, QMessageBox, QSpinBox, QComboBox
++    )
++    ALIGN_CENTER = Qt.AlignmentFlag.AlignCenter
++    USER_ROLE = Qt.ItemDataRole.UserRole
++except ImportError:
++    from PyQt5.QtCore import Qt
++    from PyQt5.QtWidgets import (
++        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGroupBox,
++        QTreeWidget, QTreeWidgetItem, QMessageBox, QSpinBox, QComboBox
++    )
++    ALIGN_CENTER = Qt.AlignCenter
++    USER_ROLE = Qt.UserRole
++
++
++class MehdoraTextileDocker(DockWidget):
++    """Built-in textile workflow panel shipped with MEHDORA."""
++
++    def __init__(self):
++        super().__init__()
++        self.setWindowTitle("MEHDORA — پارچه")
++        root = QWidget(self)
++        layout = QVBoxLayout(root)
++
++        title = QLabel("MEHDORA\nTEXTILE STUDIO")
++        title.setAlignment(ALIGN_CENTER)
++        title.setStyleSheet(
++            "font-size:18px;font-weight:700;color:#d7aa52;"
++            "padding:12px;background:#173943;border-radius:6px;"
++        )
++        layout.addWidget(title)
++
++        self.document_info = QLabel("یک فایل TIFF، PSD یا تصویر باز کن")
++        self.document_info.setWordWrap(True)
++        self.document_info.setStyleSheet(
++            "padding:8px;background:#252525;border-radius:4px;"
++        )
++        layout.addWidget(self.document_info)
++
++        repeat_box = QGroupBox("تکرار و Seamless")
++        repeat_layout = QVBoxLayout(repeat_box)
++        self.wrap_button = QPushButton("روشن/خاموش کردن تکرار زنده")
++        self.wrap_button.clicked.connect(self.toggle_wrap)
++        repeat_layout.addWidget(self.wrap_button)
++        repeat_row = QHBoxLayout()
++        repeat_row.addWidget(QLabel("عرض تکرار (cm)"))
++        self.repeat_width = QSpinBox()
++        self.repeat_width.setRange(1, 500)
++        self.repeat_width.setValue(36)
++        repeat_row.addWidget(self.repeat_width)
++        repeat_layout.addLayout(repeat_row)
++        layout.addWidget(repeat_box)
++
++        colorway_box = QGroupBox("رنگ‌بندی و لایه‌ها")
++        colorway_layout = QVBoxLayout(colorway_box)
++        self.colorway_count = QComboBox()
++        self.colorway_count.addItems(
++            ["5 رنگ‌بندی", "10 رنگ‌بندی", "15 رنگ‌بندی", "20 رنگ‌بندی"]
++        )
++        colorway_layout.addWidget(self.colorway_count)
++        create_group = QPushButton("ساخت گروه رنگ‌بندی از لایه فعال")
++        create_group.clicked.connect(self.create_colorway_group)
++        colorway_layout.addWidget(create_group)
++        overlay = QPushButton("Overlay با شفافیت 100٪")
++        overlay.clicked.connect(self.apply_overlay)
++        colorway_layout.addWidget(overlay)
++        duplicate = QPushButton("کپی رنگ‌بندی انتخابی")
++        duplicate.clicked.connect(self.duplicate_colorway)
++        colorway_layout.addWidget(duplicate)
++        layout.addWidget(colorway_box)
++
++        layers_box = QGroupBox("ساختار کامل لایه‌های سند")
++        layers_layout = QVBoxLayout(layers_box)
++        self.layers = QTreeWidget()
++        self.layers.setHeaderLabels(["نام لایه", "نوع"])
++        self.layers.itemDoubleClicked.connect(self.select_layer)
++        layers_layout.addWidget(self.layers)
++        refresh = QPushButton("بروزرسانی فهرست لایه‌ها")
++        refresh.clicked.connect(self.refresh)
++        layers_layout.addWidget(refresh)
++        layout.addWidget(layers_box, 1)
++
++        note = QLabel(
++            "TIFF لایه‌دار فتوشاپ، PSD، مدیریت رنگ و فایل‌های سنگین "
++            "با موتور داخلی برنامه پردازش می‌شوند."
++        )
++        note.setWordWrap(True)
++        note.setStyleSheet("color:#aaa;font-size:10px;padding:6px;")
++        layout.addWidget(note)
++        self.setWidget(root)
++
++    def canvasChanged(self, canvas):
++        self.refresh()
++
++    @staticmethod
++    def document():
++        return Krita.instance().activeDocument()
++
++    def add_node(self, node, parent=None):
++        item = QTreeWidgetItem([node.name(), node.type()])
++        item.setData(0, USER_ROLE, node.uniqueId().toString())
++        if parent is None:
++            self.layers.addTopLevelItem(item)
++        else:
++            parent.addChild(item)
++        for child in node.childNodes():
++            self.add_node(child, item)
++
++    def refresh(self):
++        doc = self.document()
++        self.layers.clear()
++        if not doc:
++            self.document_info.setText("یک فایل TIFF، PSD یا تصویر باز کن")
++            return
++        self.document_info.setText(
++            f"{doc.name()}\n{doc.width()} × {doc.height()} px · "
++            f"{doc.resolution()} PPI · {len(doc.topLevelNodes())} لایه اصلی"
++        )
++        for node in reversed(doc.topLevelNodes()):
++            self.add_node(node)
++        self.layers.expandAll()
++
++    def toggle_wrap(self):
++        action = Krita.instance().action("wrap_around_mode")
++        if action:
++            action.trigger()
++        else:
++            QMessageBox.information(
++                self, "MEHDORA", "حالت تکرار زنده در این ساخت پیدا نشد."
++            )
++
++    def create_colorway_group(self):
++        doc = self.document()
++        if not doc or not doc.activeNode():
++            QMessageBox.warning(
++                self, "MEHDORA", "ابتدا یک سند و لایه را انتخاب کن."
++            )
++            return
++        source = doc.activeNode()
++        group = doc.createGroupLayer("MEHDORA Colorway 01")
++        copy = source.duplicate()
++        copy.setName(source.name() + " — Colorway")
++        doc.rootNode().addChildNode(group, None)
++        group.addChildNode(copy, None)
++        doc.setActiveNode(copy)
++        doc.refreshProjection()
++        self.refresh()
++
++    def apply_overlay(self):
++        doc = self.document()
++        if not doc or not doc.activeNode():
++            return
++        node = doc.activeNode()
++        node.setBlendingMode("overlay")
++        node.setOpacity(255)
++        doc.refreshProjection()
++        self.refresh()
++
++    def duplicate_colorway(self):
++        doc = self.document()
++        if not doc or not doc.activeNode():
++            return
++        source = doc.activeNode()
++        copy = source.duplicate()
++        copy.setName(source.name() + " Copy")
++        source.parentNode().addChildNode(copy, source)
++        doc.setActiveNode(copy)
++        doc.refreshProjection()
++        self.refresh()
++
++    def select_layer(self, item):
++        doc = self.document()
++        if not doc:
++            return
++        matches = doc.rootNode().findChildNodes(item.text(0))
++        if matches:
++            doc.setActiveNode(matches[0])
++
++
++factory = DockWidgetFactory(
++    "mehdora_textile_docker",
++    DockWidgetFactoryBase.DockRight,
++    MehdoraTextileDocker,
++)
++Krita.instance().addDockWidgetFactory(factory)
+-- 
+2.51.1
+

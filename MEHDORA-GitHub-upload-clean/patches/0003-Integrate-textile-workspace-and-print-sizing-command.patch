@@ -1,0 +1,207 @@
+From eb71bb7cf73a55135a13694f9fa80cf9a8742776 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Sun, 26 Jul 2026 21:13:52 +0200
+Subject: [PATCH 3/9] Integrate textile workspace and print sizing commands
+
+---
+ .../pykrita/plugin/PythonPluginManager.cpp    |   5 +-
+ ...p => kritapykrita_mehdora_textile.desktop} |   0
+ .../mehdora_textile/mehdora_textile.py        | 114 ++++++++++++++++--
+ 3 files changed, 110 insertions(+), 9 deletions(-)
+ rename plugins/python/mehdora_textile/{mehdora_textile.desktop => kritapykrita_mehdora_textile.desktop} (100%)
+
+diff --git a/plugins/extensions/pykrita/plugin/PythonPluginManager.cpp b/plugins/extensions/pykrita/plugin/PythonPluginManager.cpp
+index 730c0f2..c0ff432 100644
+--- a/plugins/extensions/pykrita/plugin/PythonPluginManager.cpp
++++ b/plugins/extensions/pykrita/plugin/PythonPluginManager.cpp
+@@ -298,7 +298,10 @@ void PythonPluginManager::scanPlugins()
+ 
+             verifyDependenciesSetStatus(plugin);
+ 
+-            plugin.m_enabled = pluginSettings.readEntry(QString("enable_") + plugin.moduleName(), false);
++            const bool enabledByDefault = plugin.moduleName() == QStringLiteral("mehdora_textile");
++            plugin.m_enabled = pluginSettings.readEntry(
++                QString("enable_") + plugin.moduleName(),
++                enabledByDefault);
+ 
+             m_plugins.append(plugin);
+         }
+diff --git a/plugins/python/mehdora_textile/mehdora_textile.desktop b/plugins/python/mehdora_textile/kritapykrita_mehdora_textile.desktop
+similarity index 100%
+rename from plugins/python/mehdora_textile/mehdora_textile.desktop
+rename to plugins/python/mehdora_textile/kritapykrita_mehdora_textile.desktop
+diff --git a/plugins/python/mehdora_textile/mehdora_textile/mehdora_textile.py b/plugins/python/mehdora_textile/mehdora_textile/mehdora_textile.py
+index 9634b07..6eb96cb 100644
+--- a/plugins/python/mehdora_textile/mehdora_textile/mehdora_textile.py
++++ b/plugins/python/mehdora_textile/mehdora_textile/mehdora_textile.py
+@@ -1,9 +1,12 @@
+-from krita import Krita, DockWidget, DockWidgetFactory, DockWidgetFactoryBase
++from krita import (
++    Krita, Extension, DockWidget, DockWidgetFactory, DockWidgetFactoryBase
++)
+ try:
+     from PyQt6.QtCore import Qt
+     from PyQt6.QtWidgets import (
+         QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGroupBox,
+-        QTreeWidget, QTreeWidgetItem, QMessageBox, QSpinBox, QComboBox
++        QTreeWidget, QTreeWidgetItem, QMessageBox, QSpinBox, QDoubleSpinBox,
++        QComboBox
+     )
+     ALIGN_CENTER = Qt.AlignmentFlag.AlignCenter
+     USER_ROLE = Qt.ItemDataRole.UserRole
+@@ -11,7 +14,8 @@ except ImportError:
+     from PyQt5.QtCore import Qt
+     from PyQt5.QtWidgets import (
+         QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGroupBox,
+-        QTreeWidget, QTreeWidgetItem, QMessageBox, QSpinBox, QComboBox
++        QTreeWidget, QTreeWidgetItem, QMessageBox, QSpinBox, QDoubleSpinBox,
++        QComboBox
+     )
+     ALIGN_CENTER = Qt.AlignCenter
+     USER_ROLE = Qt.UserRole
+@@ -47,12 +51,19 @@ class MehdoraTextileDocker(DockWidget):
+         self.wrap_button.clicked.connect(self.toggle_wrap)
+         repeat_layout.addWidget(self.wrap_button)
+         repeat_row = QHBoxLayout()
+-        repeat_row.addWidget(QLabel("عرض تکرار (cm)"))
+-        self.repeat_width = QSpinBox()
+-        self.repeat_width.setRange(1, 500)
+-        self.repeat_width.setValue(36)
++        repeat_row.addWidget(QLabel("عرض واقعی چاپ (cm)"))
++        self.repeat_width = QDoubleSpinBox()
++        self.repeat_width.setRange(0.1, 1000.0)
++        self.repeat_width.setDecimals(2)
++        self.repeat_width.setValue(36.0)
+         repeat_row.addWidget(self.repeat_width)
+         repeat_layout.addLayout(repeat_row)
++        apply_print_size = QPushButton("ثبت اندازه واقعی بدون تغییر پیکسل‌ها")
++        apply_print_size.clicked.connect(self.apply_print_width)
++        repeat_layout.addWidget(apply_print_size)
++        self.print_info = QLabel("اندازه چاپ بعد از بازکردن سند نمایش داده می‌شود")
++        self.print_info.setWordWrap(True)
++        repeat_layout.addWidget(self.print_info)
+         layout.addWidget(repeat_box)
+ 
+         colorway_box = QGroupBox("رنگ‌بندی و لایه‌ها")
+@@ -110,20 +121,54 @@ class MehdoraTextileDocker(DockWidget):
+         for child in node.childNodes():
+             self.add_node(child, item)
+ 
++    @staticmethod
++    def node_count(node):
++        return 1 + sum(MehdoraTextileDocker.node_count(child)
++                       for child in node.childNodes())
++
++    def total_layer_count(self, doc):
++        return sum(self.node_count(node) for node in doc.topLevelNodes())
++
+     def refresh(self):
+         doc = self.document()
+         self.layers.clear()
+         if not doc:
+             self.document_info.setText("یک فایل TIFF، PSD یا تصویر باز کن")
+             return
++        resolution = max(1, doc.resolution())
++        width_cm = doc.width() / resolution * 2.54
++        height_cm = doc.height() / resolution * 2.54
++        layer_count = self.total_layer_count(doc)
+         self.document_info.setText(
+             f"{doc.name()}\n{doc.width()} × {doc.height()} px · "
+-            f"{doc.resolution()} PPI · {len(doc.topLevelNodes())} لایه اصلی"
++            f"{resolution} PPI · {layer_count} لایه"
++        )
++        self.print_info.setText(
++            f"اندازه فعلی چاپ: {width_cm:.2f} × {height_cm:.2f} cm"
+         )
++        self.repeat_width.setValue(width_cm)
+         for node in reversed(doc.topLevelNodes()):
+             self.add_node(node)
+         self.layers.expandAll()
+ 
++    def apply_print_width(self):
++        doc = self.document()
++        if not doc:
++            QMessageBox.warning(self, "MEHDORA", "ابتدا یک سند باز کن.")
++            return
++        width_cm = self.repeat_width.value()
++        new_resolution = round(doc.width() / (width_cm / 2.54))
++        if new_resolution < 1 or new_resolution > 9600:
++            QMessageBox.warning(
++                self,
++                "MEHDORA",
++                "اندازه انتخابی رزولوشن نامعتبر ایجاد می‌کند."
++            )
++            return
++        doc.setResolution(new_resolution)
++        doc.refreshProjection()
++        self.refresh()
++
+     def toggle_wrap(self):
+         action = Krita.instance().action("wrap_around_mode")
+         if action:
+@@ -181,9 +226,62 @@ class MehdoraTextileDocker(DockWidget):
+             doc.setActiveNode(matches[0])
+ 
+ 
++class MehdoraTextileExtension(Extension):
++    """MEHDORA commands exposed in the application's Scripts menu."""
++
++    def setup(self):
++        pass
++
++    def createActions(self, window):
++        wrap = window.createAction(
++            "mehdora_wrap_preview",
++            "MEHDORA — پیش‌نمایش تکرار زنده"
++        )
++        wrap.triggered.connect(self.toggle_wrap)
++
++        overlay = window.createAction(
++            "mehdora_overlay_100",
++            "MEHDORA — Overlay با شفافیت 100٪"
++        )
++        overlay.triggered.connect(self.overlay_100)
++
++        colorway = window.createAction(
++            "mehdora_duplicate_colorway",
++            "MEHDORA — کپی رنگ‌بندی"
++        )
++        colorway.triggered.connect(self.duplicate_colorway)
++
++    @staticmethod
++    def toggle_wrap():
++        action = Krita.instance().action("wrap_around_mode")
++        if action:
++            action.trigger()
++
++    @staticmethod
++    def overlay_100():
++        doc = Krita.instance().activeDocument()
++        if doc and doc.activeNode():
++            doc.activeNode().setBlendingMode("overlay")
++            doc.activeNode().setOpacity(255)
++            doc.refreshProjection()
++
++    @staticmethod
++    def duplicate_colorway():
++        doc = Krita.instance().activeDocument()
++        if not doc or not doc.activeNode():
++            return
++        source = doc.activeNode()
++        copy = source.duplicate()
++        copy.setName(source.name() + " — Colorway Copy")
++        source.parentNode().addChildNode(copy, source)
++        doc.setActiveNode(copy)
++        doc.refreshProjection()
++
++
+ factory = DockWidgetFactory(
+     "mehdora_textile_docker",
+     DockWidgetFactoryBase.DockRight,
+     MehdoraTextileDocker,
+ )
+ Krita.instance().addDockWidgetFactory(factory)
++Krita.instance().addExtension(MehdoraTextileExtension(Krita.instance()))
+-- 
+2.51.1
+

@@ -1,0 +1,133 @@
+From 5eed0f29ffc36f5d22daa93edfd40de25560164d Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Sun, 26 Jul 2026 22:23:14 +0200
+Subject: [PATCH 9/9] Add MEHDORA branding build audit
+
+---
+ .gitlab-ci.yml                   |  8 +++
+ tools/verify_mehdora_branding.py | 94 ++++++++++++++++++++++++++++++++
+ 2 files changed, 102 insertions(+)
+ create mode 100644 tools/verify_mehdora_branding.py
+
+diff --git a/.gitlab-ci.yml b/.gitlab-ci.yml
+index 693949e..e8397a6 100644
+--- a/.gitlab-ci.yml
++++ b/.gitlab-ci.yml
+@@ -145,6 +145,14 @@ workflow:
+     - if [[ ! -f .clang-format && ! -f _clang-format ]]; then wget -O .clang-format https://invent.kde.org/frameworks/extra-cmake-modules/-/raw/master/kde-modules/clang-format.cmake; fi
+     - ./ci-utilities/run-clang-format.py
+ 
++mehdora_brand_audit:
++  stage: build
++  image: python:3.13-alpine
++  script:
++    - python3 tools/verify_mehdora_branding.py
++  rules:
++    - when: always
++
+ 
+ include:
+   - local: /build-tools/ci-scripts/linux.yml
+diff --git a/tools/verify_mehdora_branding.py b/tools/verify_mehdora_branding.py
+new file mode 100644
+index 0000000..7060a0b
+--- /dev/null
++++ b/tools/verify_mehdora_branding.py
+@@ -0,0 +1,94 @@
++#!/usr/bin/env python3
++"""Fail the build when the Windows MEHDORA identity is incomplete."""
++
++from __future__ import annotations
++
++import struct
++import sys
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[1]
++
++
++def require_text(path: str, *needles: str) -> None:
++    content = (ROOT / path).read_text(encoding="utf-8")
++    for needle in needles:
++        if needle not in content:
++            raise AssertionError(f"{path}: missing {needle!r}")
++
++
++def forbid_text(path: str, *needles: str) -> None:
++    content = (ROOT / path).read_text(encoding="utf-8")
++    for needle in needles:
++        if needle in content:
++            raise AssertionError(f"{path}: visible legacy branding {needle!r}")
++
++
++def png_size(path: Path) -> tuple[int, int]:
++    data = path.read_bytes()[:24]
++    if data[:8] != b"\x89PNG\r\n\x1a\n":
++        raise AssertionError(f"{path}: not a PNG file")
++    return struct.unpack(">II", data[16:24])
++
++
++def verify_icons() -> None:
++    icon_dir = ROOT / "krita/pics/branding/default"
++    for size in (16, 22, 24, 32, 48, 64, 128, 256, 512, 1024):
++        path = icon_dir / f"{size}-apps-krita.png"
++        if png_size(path) != (size, size):
++            raise AssertionError(f"{path}: incorrect dimensions")
++
++    ico = (icon_dir / "krita.ico").read_bytes()
++    reserved, image_type, count = struct.unpack("<HHH", ico[:6])
++    if reserved != 0 or image_type != 1 or count < 6:
++        raise AssertionError("Windows application icon is invalid")
++
++
++def main() -> int:
++    require_text(
++        "krita/CMakeLists.txt",
++        'OUTPUT_NAME "MEHDORA-Textile-Studio"',
++    )
++    require_text(
++        "krita/main.cc",
++        '"MEHDORA Textile Studio"',
++        '"mehdora-textile-studio"',
++        '"app.mehdora.textilestudio"',
++        "MehdoraBrandingFilter",
++    )
++    require_text(
++        "krita/versioninfo.rc.in",
++        '#define KRITA_FOUNDATION_STR "MEHDORA"',
++        'VALUE "ProductName", "MEHDORA Textile Studio"',
++        'VALUE "OriginalFilename", "MEHDORA-Textile-Studio.exe"',
++    )
++    require_text(
++        "packaging/windows/installer/installer_krita.nsi",
++        '!define MUI_STARTMENUPAGE_DEFAULTFOLDER "MEHDORA Textile Studio"',
++        '!define KRTIA_PUBLISHER "MEHDORA"',
++    )
++
++    forbid_text(
++        "krita/kritamenu.action",
++        "About Krita",
++        "Configure Krita",
++        "Krita Handbook",
++    )
++    forbid_text(
++        "krita/versioninfo.rc.in",
++        '"Krita Foundation"',
++        '"Krita"',
++    )
++
++    verify_icons()
++    print("MEHDORA branding audit passed")
++    return 0
++
++
++if __name__ == "__main__":
++    try:
++        raise SystemExit(main())
++    except (AssertionError, OSError, UnicodeError) as error:
++        print(f"MEHDORA branding audit failed: {error}", file=sys.stderr)
++        raise SystemExit(1)
+-- 
+2.51.1
+
