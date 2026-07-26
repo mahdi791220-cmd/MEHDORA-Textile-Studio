@@ -1,0 +1,68 @@
+From 4cf2aa83d486066a405a590f36fe9adfffec847f Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Sun, 26 Jul 2026 21:20:28 +0200
+Subject: [PATCH 5/9] Add automated MEHDORA Windows installer pipeline
+
+---
+ .gitlab-ci.yml                     |  5 +++++
+ build-tools/ci-scripts/windows.yml | 21 +++++++++++++++++++++
+ 2 files changed, 26 insertions(+)
+
+diff --git a/.gitlab-ci.yml b/.gitlab-ci.yml
+index 4ad58f3..693949e 100644
+--- a/.gitlab-ci.yml
++++ b/.gitlab-ci.yml
+@@ -72,6 +72,10 @@ variables:
+       - "krita-*.zip"
+       - "krita-*-setup.exe"
+       - "krita-*.msix"
++      - "MEHDORA-Textile-Studio-*.zip"
++      - "MEHDORA-Textile-Studio-*-Setup.exe"
++      - "MEHDORA-Textile-Studio-*-setup.exe"
++      - "MEHDORA-Textile-Studio-*.msix"
+       # Linux, MacOS and Android packages
+       - "_packaging"
+       # Logs from MacOS signer/notarizer
+@@ -125,6 +129,7 @@ workflow:
+     # Build branches too
+     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+     - if: $CI_COMMIT_BRANCH =~ /^krita\//
++    - if: $CI_COMMIT_BRANCH =~ /^mehdora/
+     - if: $CI_COMMIT_BRANCH =~ $release_branch_pattern
+ 
+ .clang_format:
+diff --git a/build-tools/ci-scripts/windows.yml b/build-tools/ci-scripts/windows.yml
+index 6f44ce1..cd78621 100644
+--- a/build-tools/ci-scripts/windows.yml
++++ b/build-tools/ci-scripts/windows.yml
+@@ -69,6 +69,27 @@ windows-build-qt6:
+   - .windows-qt6-base
+   - .ci-manual-job-mixin
+ 
++mehdora-windows-installer:
++  extends:
++  - .windows-qt6-base
++  - .ci-always-job-mixin
++  rules:
++    - if: $CI_COMMIT_BRANCH =~ /^mehdora/
++      when: always
++    - when: never
++  variables:
++    KDECI_BUILD_TYPE: Release
++    KDECI_ONLY_BUILD: "True"
++    KRITACI_SKIP_DEBUG_PACKAGE: "True"
++    KRITACI_BUILD_INSTALLERS: "True"
++    KRITACI_RELEASE_PACKAGE_NAMING: "True"
++    KRITACI_WINDOWS_SIGN_CONFIG: do-not-sign-mehdora-build.non-existent-file.ini
++    KDECI_EXTRA_CMAKE_ARGS: >
++      -DHIDE_SAFE_ASSERTS=ON
++      -DBUILD_TESTING=OFF
++      -DBUILD_WITH_QT6=ON
++      -DALLOW_UNSTABLE=QT6
++
+ windows-build-qt5-nightly:
+   extends:
+     - .windows-base
+-- 
+2.51.1
+

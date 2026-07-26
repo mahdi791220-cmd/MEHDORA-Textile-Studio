@@ -1,0 +1,306 @@
+From c17d8739ad1e395c2bf08c22897a1087ed2650aa Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Sun, 26 Jul 2026 21:09:57 +0200
+Subject: [PATCH 2/9] Tune large document memory and brand Windows packaging
+
+---
+ .../ci-scripts/build-windows-package.py       |  3 +-
+ libs/image/kis_image_config.cpp               |  4 +--
+ .../windows/installer/installer_krita.nsi     | 36 +++++++++----------
+ packaging/windows/msix/build_msix.py          |  4 +--
+ packaging/windows/msix/manifest.xml.in        |  2 +-
+ packaging/windows/package-complete-msvc.py    |  8 ++---
+ packaging/windows/package-complete.py         | 25 ++++++-------
+ 7 files changed, 38 insertions(+), 44 deletions(-)
+
+diff --git a/build-tools/ci-scripts/build-windows-package.py b/build-tools/ci-scripts/build-windows-package.py
+index 8870fe0..3be6e02 100644
+--- a/build-tools/ci-scripts/build-windows-package.py
++++ b/build-tools/ci-scripts/build-windows-package.py
+@@ -57,7 +57,7 @@ with open(os.path.join(buildPath, "libs/version/kritaversion.h"), "r") as fp:
+ unstablePackageSuffix = '-{}'.format(os.environ['CI_COMMIT_SHORT_SHA']) \
+     if not arguments.release_package_naming else ''
+ 
+-packageName = 'krita-x64-{}{}'.format(kritaVersionString, unstablePackageSuffix)
++packageName = 'MEHDORA-Textile-Studio-x64-{}{}'.format(kritaVersionString, unstablePackageSuffix)
+ hookFile = os.path.join(srcPath, 'build-tools', 'ci-scripts', 'sign-windows-package-at-notary-service.py')
+ 
+ commandToRun = ' '.join([sys.executable,
+@@ -161,4 +161,3 @@ if arguments.build_installers:
+ 
+     for f in glob.iglob(os.path.join(msixFolder, '*.log')):
+         shutil.move(f, os.getcwd())
+-
+diff --git a/libs/image/kis_image_config.cpp b/libs/image/kis_image_config.cpp
+index eba8c3c..ca3d7bf 100644
+--- a/libs/image/kis_image_config.cpp
++++ b/libs/image/kis_image_config.cpp
+@@ -141,7 +141,7 @@ void KisImageConfig::setSchedulerBalancingRatio(qreal value)
+ int KisImageConfig::maxSwapSize(bool requestDefault) const
+ {
+     return !requestDefault ?
+-        m_config.readEntry("maxSwapSize", 4096) : 4096; // in MiB
++        m_config.readEntry("maxSwapSize", 32768) : 32768; // in MiB
+ }
+ 
+ void KisImageConfig::setMaxSwapSize(int value)
+@@ -195,7 +195,7 @@ int KisImageConfig::poolLimit() const
+ qreal KisImageConfig::memoryHardLimitPercent(bool requestDefault) const
+ {
+     return !requestDefault ?
+-        m_config.readEntry("memoryHardLimitPercent", 50.) : 50.;
++        m_config.readEntry("memoryHardLimitPercent", 70.) : 70.;
+ }
+ 
+ void KisImageConfig::setMemoryHardLimitPercent(qreal value)
+diff --git a/packaging/windows/installer/installer_krita.nsi b/packaging/windows/installer/installer_krita.nsi
+index c72f04b..8dafd43 100644
+--- a/packaging/windows/installer/installer_krita.nsi
++++ b/packaging/windows/installer/installer_krita.nsi
+@@ -25,9 +25,9 @@ ManifestDPIAware false
+ #!define /ifndef KRITA_VERSION_GIT ""
+ !define /ifndef KRITA_INSTALLER_OUTPUT_DIR ""
+ !ifdef KRITA_INSTALLER_64
+-	!define /ifndef KRITA_INSTALLER_OUTPUT_NAME "krita_x64_setup.exe"
++	!define /ifndef KRITA_INSTALLER_OUTPUT_NAME "MEHDORA-Textile-Studio-x64-Setup.exe"
+ !else
+-	!define /ifndef KRITA_INSTALLER_OUTPUT_NAME "krita_x86_setup.exe"
++	!define /ifndef KRITA_INSTALLER_OUTPUT_NAME "MEHDORA-Textile-Studio-x86-Setup.exe"
+ !endif
+ 
+ # Krita constants (fixed)
+@@ -36,13 +36,13 @@ ManifestDPIAware false
+ !else
+ 	!define KRITA_INSTALLER_OUTPUT "${KRITA_INSTALLER_OUTPUT_DIR}\${KRITA_INSTALLER_OUTPUT_NAME}"
+ !endif
+-!define KRTIA_PUBLISHER "Krita Foundation"
++!define KRTIA_PUBLISHER "MEHDORA — powered by Krita"
+ !ifdef KRITA_INSTALLER_64
+-	!define KRITA_PRODUCTNAME "Krita (x64)"
+-	!define KRITA_UNINSTALL_REGKEY "Krita_x64"
++	!define KRITA_PRODUCTNAME "MEHDORA Textile Studio (x64)"
++	!define KRITA_UNINSTALL_REGKEY "MEHDORA_Textile_Studio_x64"
+ !else
+-	!define KRITA_PRODUCTNAME "Krita (x86)"
+-	!define KRITA_UNINSTALL_REGKEY "Krita_x86"
++	!define KRITA_PRODUCTNAME "MEHDORA Textile Studio (x86)"
++	!define KRITA_UNINSTALL_REGKEY "MEHDORA_Textile_Studio_x86"
+ !endif
+ 
+ VIProductVersion "${KRITA_VERSION}"
+@@ -60,9 +60,9 @@ BrandingText "[NSIS ${NSIS_VERSION}]  ${KRITA_PRODUCTNAME} ${KRITA_VERSION}"
+ Name "${KRITA_PRODUCTNAME} ${KRITA_VERSION_DISPLAY}"
+ OutFile ${KRITA_INSTALLER_OUTPUT}
+ !ifdef KRITA_INSTALLER_64
+-	InstallDir "$PROGRAMFILES64\Krita (x64)"
++	InstallDir "$PROGRAMFILES64\MEHDORA Textile Studio"
+ !else
+-	InstallDir "$PROGRAMFILES32\Krita (x86)"
++	InstallDir "$PROGRAMFILES32\MEHDORA Textile Studio"
+ !endif
+ XPstyle on
+ 
+@@ -240,18 +240,18 @@ SectionEnd
+ 
+ Section "-Main_associate"
+ 	CreateDirectory ${KRITA_SHELLEX_DIR}
+-	${Krita_RegisterFileAssociation} "$INSTDIR\bin\krita.exe"
++	${Krita_RegisterFileAssociation} "$INSTDIR\bin\MEHDORA-Textile-Studio.exe"
+ SectionEnd
+ 
+ Section "-Main_Shortcuts"
+ 	# Placing this after Krita_RegisterFileAssociation to get the icon
+ 	!insertmacro MUI_STARTMENU_WRITE_BEGIN Krita
+ 		CreateDirectory "$SMPROGRAMS\$KritaStartMenuFolder"
+-		CreateShortcut "$SMPROGRAMS\$KritaStartMenuFolder\${KRITA_PRODUCTNAME}.lnk" "$INSTDIR\bin\krita.exe" "" "$INSTDIR\shellex\krita.ico" 0
++		CreateShortcut "$SMPROGRAMS\$KritaStartMenuFolder\${KRITA_PRODUCTNAME}.lnk" "$INSTDIR\bin\MEHDORA-Textile-Studio.exe" "" "$INSTDIR\shellex\krita.ico" 0
+ 	!insertmacro MUI_STARTMENU_WRITE_END
+ 	${If} $CreateDesktopIcon == 1
+ 		# For the desktop icon, keep the name short and omit version info
+-		CreateShortcut "$DESKTOP\Krita.lnk" "$INSTDIR\bin\krita.exe" "" "$INSTDIR\shellex\krita.ico" 0
++		CreateShortcut "$DESKTOP\MEHDORA Textile Studio.lnk" "$INSTDIR\bin\MEHDORA-Textile-Studio.exe" "" "$INSTDIR\shellex\krita.ico" 0
+ 	${EndIf}
+ SectionEnd
+ 
+@@ -278,10 +278,10 @@ Section "$(SectionShellEx)" SEC_shellex
+ 	WriteRegDWORD HKLM "Software\Krita\ShellExtension" \
+ 	                   "Standalone" 0
+ 	#   ShellExtension\KritaExePath:
+-	#     Path to krita.exe as specified by user or by Krita installer
++	#     Path to MEHDORA-Textile-Studio.exe as specified by user or by Krita installer
+ 	#     Empty if not specified
+ 	WriteRegStr HKLM "Software\Krita\ShellExtension" \
+-	                 "KritaExePath" "$INSTDIR\bin\krita.exe"
++	                 "KritaExePath" "$INSTDIR\bin\MEHDORA-Textile-Studio.exe"
+ SectionEnd
+ 
+ Section "-Main_refreshShell"
+@@ -346,7 +346,7 @@ Section "un.Main_associate"
+ SectionEnd
+ 
+ Section "un.Main_Shortcuts"
+-	Delete "$DESKTOP\Krita.lnk"
++	Delete "$DESKTOP\MEHDORA Textile Studio.lnk"
+ 	!insertmacro MUI_STARTMENU_GETFOLDER Krita $KritaStartMenuFolder
+ 	Delete "$SMPROGRAMS\$KritaStartMenuFolder\${KRITA_PRODUCTNAME}.lnk"
+ 	RMDir "$SMPROGRAMS\$KritaStartMenuFolder"
+@@ -520,7 +520,7 @@ Function .onInit
+ 		${EndIf}
+ 		!insertmacro SetSectionFlag ${SEC_remove_old_version} ${SF_SELECTED}
+ 		# Detect if Krita is running...
+-		${If} ${IsFileinUse} "$KritaNsisInstallLocation\bin\krita.exe"
++		${If} ${IsFileinUse} "$KritaNsisInstallLocation\bin\MEHDORA-Textile-Studio.exe"
+ 			${IfNot} ${Silent}
+ 				MessageBox MB_OK|MB_ICONEXCLAMATION "$(MsgKritaRunning)"
+ 			${EndIf}
+@@ -578,7 +578,7 @@ Function un.onInit
+ 		# Only check here if running in silent mode. It's otherwise checked in
+ 		# un.func_UnintallFirstpage_Init in order to display a prompt in the
+ 		# correct language.
+-		${If} ${IsFileinUse} "$INSTDIR\bin\krita.exe"
++		${If} ${IsFileinUse} "$INSTDIR\bin\MEHDORA-Textile-Studio.exe"
+ 			SetErrorLevel 10
+ 			Abort
+ 		${EndIf}
+@@ -586,7 +586,7 @@ Function un.onInit
+ FunctionEnd
+ 
+ Function un.func_UnintallFirstpage_Init
+-	${If} ${IsFileinUse} "$INSTDIR\bin\krita.exe"
++	${If} ${IsFileinUse} "$INSTDIR\bin\MEHDORA-Textile-Studio.exe"
+ 		${IfNot} ${Silent}
+ 			MessageBox MB_OK|MB_ICONEXCLAMATION "$(MsgUninstallKritaRunning)"
+ 		${EndIf}
+diff --git a/packaging/windows/msix/build_msix.py b/packaging/windows/msix/build_msix.py
+index 53dd671..18b67e1 100644
+--- a/packaging/windows/msix/build_msix.py
++++ b/packaging/windows/msix/build_msix.py
+@@ -146,8 +146,8 @@ if environ.get('KRITA_SHELLEX'):
+     print("=== Step 0 done. ===")
+ 
+ # Sanity checks:
+-if not os.path.isfile(fr"{environ['KRITA_DIR']}\bin\krita.exe"):
+-    warnings.warn(fr'ERROR: KRITA_DIR is set to "{environ["KRITA_DIR"]}" but {environ["KRITA_DIR"]}\bin\krita.exe" does not exist!')
++if not os.path.isfile(fr"{environ['KRITA_DIR']}\bin\MEHDORA-Textile-Studio.exe"):
++    warnings.warn(fr'ERROR: KRITA_DIR is set to "{environ["KRITA_DIR"]}" but {environ["KRITA_DIR"]}\bin\MEHDORA-Textile-Studio.exe" does not exist!')
+     sys.exit(1)
+ if not os.path.isfile(fr"{environ['KRITA_DIR']}\shellex\kritashellex64.dll"):
+     warnings.warn(fr'ERROR: "{environ["KRITA_DIR"]}\shellex\kritashellex64.dll" does not exist!')
+diff --git a/packaging/windows/msix/manifest.xml.in b/packaging/windows/msix/manifest.xml.in
+index c7dacbe..a4463a7 100644
+--- a/packaging/windows/msix/manifest.xml.in
++++ b/packaging/windows/msix/manifest.xml.in
+@@ -21,7 +21,7 @@
+     <rescap:Capability Name="runFullTrust" />
+   </Capabilities>
+   <Applications>
+-    <Application Id="Krita" Executable="krita\bin\krita.exe" EntryPoint="Windows.FullTrustApplication">
++    <Application Id="Krita" Executable="krita\bin\MEHDORA-Textile-Studio.exe" EntryPoint="Windows.FullTrustApplication">
+       <uap:VisualElements DisplayName="Krita" Description="Digital Painting, Creative Freedom!" BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png">
+         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" Square310x310Logo="Assets\Square310x310Logo.png" Square71x71Logo="Assets\Square71x71Logo.png">
+           <uap:ShowNameOnTiles>
+diff --git a/packaging/windows/package-complete-msvc.py b/packaging/windows/package-complete-msvc.py
+index 0496d5f..c14afc4 100644
+--- a/packaging/windows/package-complete-msvc.py
++++ b/packaging/windows/package-complete-msvc.py
+@@ -200,9 +200,9 @@ except:
+     exit(1)
+ 
+ print("\nCopying files...")
+-# krita.exe
+-shutil.copy(f"{KRITA_INSTALL_DIR}\\bin\\krita.exe", f"{pkg_root}\\bin\\")
+-shutil.copy(f"{KRITA_INSTALL_DIR}\\bin\\krita.com", f"{pkg_root}\\bin\\")
++# MEHDORA-Textile-Studio.exe
++shutil.copy(f"{KRITA_INSTALL_DIR}\\bin\\MEHDORA-Textile-Studio.exe", f"{pkg_root}\\bin\\")
++shutil.copy(f"{KRITA_INSTALL_DIR}\\bin\\MEHDORA-Textile-Studio.com", f"{pkg_root}\\bin\\")
+ if os.path.isfile(f"{KRITA_INSTALL_DIR}\\bin\\krita.pdb"):
+     shutil.copy(f"{KRITA_INSTALL_DIR}\\bin\\krita.pdb", f"{pkg_root}\\bin\\")
+ # kritarunner.exe
+@@ -317,7 +317,7 @@ if os.path.isdir(f"{KRITA_INSTALL_DIR}\\lib\\qml"):
+ 
+ # windeployqt
+ subprocess.run(["windeployqt.exe", *QMLDIR_ARGS, "--release", "-gui", "-core", "-concurrent", "-network", "-printsupport", "-svg",
+-               "-xml", "-sql", "-qml", "-quick", "-quickwidgets", f"{pkg_root}\\bin\\krita.exe", f"{pkg_root}\\bin\\krita.dll"], check=True)
++               "-xml", "-sql", "-qml", "-quick", "-quickwidgets", f"{pkg_root}\\bin\\MEHDORA-Textile-Studio.exe", f"{pkg_root}\\bin\\krita.dll"], check=True)
+ 
+ # ffmpeg
+ if os.path.exists(f"{DEPS_INSTALL_DIR}\\bin\\ffmpeg.exe"):
+diff --git a/packaging/windows/package-complete.py b/packaging/windows/package-complete.py
+index 2cd843f..067cd17 100644
+--- a/packaging/windows/package-complete.py
++++ b/packaging/windows/package-complete.py
+@@ -307,7 +307,7 @@ for arg in ("objdump", "llvm-objdump"):
+ if not OBJDUMP:
+     logger.error("objdump is not working.")
+     sys.exit(1)
+-output = subprocess.check_output(fr"{OBJDUMP} -f {KRITA_INSTALL_DIR}\bin\krita.exe", text=True)
++output = subprocess.check_output(fr"{OBJDUMP} -f {KRITA_INSTALL_DIR}\bin\MEHDORA-Textile-Studio.exe", text=True)
+ targetArchLines = output.splitlines()
+ 
+ TARGET_ARCH_LINE = ""
+@@ -402,7 +402,7 @@ elif IS_LLVM_MINGW:
+         asanLibName = 'libclang_rt.asan_dynamic-x86_64'
+         os.environ['STDLIBS_DIR'] = fr"{os.environ['MINGW_BIN_DIR']}\..\x86_64-w64-mingw32\bin"
+ 
+-    output = subprocess.check_output(fr"{OBJDUMP} -p {KRITA_INSTALL_DIR}\bin\krita.exe", text=True)
++    output = subprocess.check_output(fr"{OBJDUMP} -p {KRITA_INSTALL_DIR}\bin\MEHDORA-Textile-Studio.exe", text=True)
+ 
+     if re.search(asanLibName, output):
+         logger.info('The package contains ASAN, packaging the ASAN runtime as well!')
+@@ -433,9 +433,9 @@ for lib in os.environ['STDLIBS'].split(" "):
+ 
+ logger.info("")
+ logger.info("Copying files...")
+-# krita.exe
+-shutil.copy(f"{KRITA_INSTALL_DIR}\\bin\\krita.exe", f"{pkg_root}\\bin\\")
+-shutil.copy(f"{KRITA_INSTALL_DIR}\\bin\\krita.com", f"{pkg_root}\\bin\\")
++# MEHDORA-Textile-Studio.exe
++shutil.copy(f"{KRITA_INSTALL_DIR}\\bin\\MEHDORA-Textile-Studio.exe", f"{pkg_root}\\bin\\")
++shutil.copy(f"{KRITA_INSTALL_DIR}\\bin\\MEHDORA-Textile-Studio.com", f"{pkg_root}\\bin\\")
+ if os.path.isfile(f"{KRITA_INSTALL_DIR}\\bin\\krita.pdb"):
+     shutil.copy(f"{KRITA_INSTALL_DIR}\\bin\\krita.pdb", f"{pkg_root}\\bin\\")
+ # kritarunner.exe
+@@ -531,12 +531,7 @@ MergeFolders.merge_folders(f"{DEPS_INSTALL_DIR}\\share\\mime", f"{pkg_root}\\sha
+ MergeFolders.merge_folders(f"{KRITA_INSTALL_DIR}\\share\\locale", f"{pkg_root}\\bin\\locale")
+ MergeFolders.merge_folders(f"{DEPS_INSTALL_DIR}\\share\\locale", f"{pkg_root}\\bin\\locale")
+ 
+-# Copy shortcut link from source (can't create it dynamically)
+-shutil.copy(f"{KRITA_SRC_DIR}\\packaging\\windows\\krita.lnk", pkg_root)
+-shutil.copy(
+-    f"{KRITA_SRC_DIR}\\packaging\\windows\\krita-minimal.lnk", pkg_root)
+-shutil.copy(
+-    f"{KRITA_SRC_DIR}\\packaging\\windows\\krita-animation.lnk", pkg_root)
++# Desktop and Start Menu shortcuts are created by the MEHDORA installer.
+ 
+ # QML deployment:
+ #
+@@ -585,13 +580,13 @@ if useQt6Build:
+         "-gui", "-core", "-core5compat", "-openglwidgets", "-svgwidgets", "-opengl",
+         "-concurrent", "-network", "-printsupport", "-svg",
+         "-xml", "-sql", "-qml", "-quick", "-quickwidgets", *verboseOption,
+-        f"{pkg_root}\\bin\\krita.exe", f"{pkg_root}\\bin\\krita.dll"])
++        f"{pkg_root}\\bin\\MEHDORA-Textile-Studio.exe", f"{pkg_root}\\bin\\krita.dll"])
+ else:
+     verboseOption = ["-verbose", "2"] if useVerbosePackagingLog else []
+     run_subprocess_checked(
+         ["windeployqt.exe", *QMLDIR_ARGS, "--release", "-gui", "-core", "-concurrent", "-network", "-printsupport", "-svg",
+         "-xml", "-sql", "-qml", "-quick", "-quickwidgets", *verboseOption,
+-        f"{pkg_root}\\bin\\krita.exe", f"{pkg_root}\\bin\\krita.dll"])
++        f"{pkg_root}\\bin\\MEHDORA-Textile-Studio.exe", f"{pkg_root}\\bin\\krita.dll"])
+ 
+ # ffmpeg
+ if os.path.exists(f"{DEPS_INSTALL_DIR}\\bin\\ffmpeg.exe"):
+@@ -700,8 +695,8 @@ if not os.environ.get('KRITACI_SKIP_SPLIT_DEBUG', '0').lower() in ['true', '1',
+             return status.returncode
+         return 0
+ 
+-    split_debug(fr"{pkg_root}\bin\krita.exe", r"bin\krita.exe")
+-    split_debug(fr"{pkg_root}\bin\krita.com", r"bin\krita.com")
++    split_debug(fr"{pkg_root}\bin\MEHDORA-Textile-Studio.exe", r"bin\MEHDORA-Textile-Studio.exe")
++    split_debug(fr"{pkg_root}\bin\MEHDORA-Textile-Studio.com", r"bin\MEHDORA-Textile-Studio.com")
+     split_debug(fr"{pkg_root}\bin\kritarunner.exe", r"bin\kritarunner.exe")
+     split_debug(fr"{pkg_root}\bin\kritarunner.com", r"bin\kritarunner.com")
+     split_debug(fr"{pkg_root}\bin\ffmpeg.exe", r"bin\ffmpeg.exe")
+-- 
+2.51.1
+
