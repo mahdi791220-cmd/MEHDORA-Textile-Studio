@@ -84,7 +84,7 @@ jobs:
         run: |
           python -u krita-deps-management/tools/replace-branch-in-seed-file.py krita-deps-management/latest/krita-deps.yml -p -o branch-corrected-deps.yml -d $env:EFFECTIVE_DEPS_BRANCH_NAME
           python -u krita-deps-management/tools/generate-deps-file.py -s branch-corrected-deps.yml -o .kde-ci.yml
-           - name: Install ccache
+      - name: Install ccache
         shell: pwsh
         run: choco install ccache -y
       - name: Build MEHDORA
