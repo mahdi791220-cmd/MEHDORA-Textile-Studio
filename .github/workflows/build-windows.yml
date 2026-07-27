@@ -31,7 +31,7 @@ jobs:
   windows-installer:
     name: Windows installer
     needs: verify-patches
-    runs-on: windows-2025
+    runs-on:windows-2022
     timeout-minutes: 360
     env:
       PYTHONUTF8: "1"
