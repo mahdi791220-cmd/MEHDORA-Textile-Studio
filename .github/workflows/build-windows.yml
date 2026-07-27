@@ -61,7 +61,11 @@ jobs:
         run: |
           git config user.name "MEHDORA Build"
           git config user.email "build@mehdora.app"
-          git am --3way ../patches/*.patch
+          $patchFiles = Get-ChildItem ../patches/*.patch | Sort-Object Name
+          foreach ($patchFile in $patchFiles) {
+            git am --3way $patchFile.FullName
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - name: Audit MEHDORA branding
         working-directory: source
         run: python tools/verify_mehdora_branding.py
