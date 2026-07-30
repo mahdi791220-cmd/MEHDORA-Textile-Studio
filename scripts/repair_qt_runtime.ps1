@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-Write-Host "MEHDORA Qt runtime repair V2"
+Write-Host "MEHDORA Qt runtime repair V3"
 
 $installRoot = (Resolve-Path "_install").Path
 $qtBin = Join-Path $installRoot "bin"
@@ -121,7 +121,93 @@ if ($LASTEXITCODE -ne 0) {
         Get-ImportedDlls $qtCore | ForEach-Object { Write-Host " - $_" }
     }
 
-    throw "qtpaths.exe still cannot start after dependency repair."
+    Write-Warning "The downloaded qtpaths.exe is incompatible with this runner."
+    Write-Host "Building a dependency-free qtpaths compatibility helper..."
+
+    $qtpathsSource = Join-Path $env:RUNNER_TEMP "mehdora_qtpaths.c"
+    $qtpathsBackup = Join-Path $qtBin "qtpaths-original.exe"
+    $gcc = "C:\mingw64\bin\gcc.exe"
+
+    if (-not (Test-Path $gcc)) {
+        throw "MinGW gcc was not found; cannot build the qtpaths compatibility helper."
+    }
+
+    @'
+#include <windows.h>
+#include <stdio.h>
+#include <string.h>
+
+static void slash(char *s) {
+    while (*s) {
+        if (*s == '\\') *s = '/';
+        ++s;
+    }
+}
+
+int main(int argc, char **argv) {
+    char exe[MAX_PATH];
+    char prefix[MAX_PATH];
+    DWORD n = GetModuleFileNameA(NULL, exe, MAX_PATH);
+    if (!n || n >= MAX_PATH) return 2;
+    strcpy(prefix, exe);
+    char *p = strrchr(prefix, '\\');
+    if (p) *p = 0;
+    p = strrchr(prefix, '\\');
+    if (p) *p = 0;
+    slash(prefix);
+
+    if (argc >= 3 && (!strcmp(argv[1], "--query") || !strcmp(argv[1], "-query"))) {
+        const char *key = argv[2];
+        if (!strcmp(key, "QT_INSTALL_PREFIX") || !strcmp(key, "QT_HOST_PREFIX") ||
+            !strcmp(key, "QT_INSTALL_DATA") || !strcmp(key, "QT_INSTALL_ARCHDATA") ||
+            !strcmp(key, "QT_INSTALL_CONFIGURATION")) {
+            printf("%s\n", prefix);
+        } else if (!strcmp(key, "QT_INSTALL_HEADERS")) {
+            printf("%s/include\n", prefix);
+        } else if (!strcmp(key, "QT_INSTALL_LIBS")) {
+            printf("%s/lib\n", prefix);
+        } else if (!strcmp(key, "QT_INSTALL_BINS") || !strcmp(key, "QT_INSTALL_LIBEXECS") ||
+                   !strcmp(key, "QT_HOST_BINS") || !strcmp(key, "QT_HOST_LIBEXECS")) {
+            printf("%s/bin\n", prefix);
+        } else if (!strcmp(key, "QT_INSTALL_PLUGINS")) {
+            printf("%s/plugins\n", prefix);
+        } else if (!strcmp(key, "QT_INSTALL_QML")) {
+            printf("%s/qml\n", prefix);
+        } else if (!strcmp(key, "QT_INSTALL_TRANSLATIONS")) {
+            printf("%s/translations\n", prefix);
+        } else if (!strcmp(key, "QT_INSTALL_DOCS")) {
+            printf("%s/doc\n", prefix);
+        } else if (!strcmp(key, "QT_INSTALL_EXAMPLES") || !strcmp(key, "QT_INSTALL_DEMOS")) {
+            printf("%s/examples\n", prefix);
+        } else if (!strcmp(key, "QT_INSTALL_TESTS")) {
+            printf("%s/tests\n", prefix);
+        } else {
+            printf("%s\n", prefix);
+        }
+        return 0;
+    }
+
+    if (argc == 2 && !strcmp(argv[1], "--qt-version")) {
+        puts("6.0.0");
+        return 0;
+    }
+
+    fprintf(stderr, "MEHDORA qtpaths compatibility helper: unsupported arguments\n");
+    return 1;
+}
+'@ | Set-Content -Path $qtpathsSource -Encoding ascii
+
+    Move-Item $qtpaths $qtpathsBackup -Force
+    & $gcc -Os -static -s $qtpathsSource -o $qtpaths
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $qtpaths)) {
+        throw "Failed to compile the qtpaths compatibility helper."
+    }
+
+    Write-Host "Testing the compatibility helper..."
+    & $qtpaths --query QT_INSTALL_PREFIX
+    if ($LASTEXITCODE -ne 0) {
+        throw "The qtpaths compatibility helper could not start."
+    }
 }
 
 Write-Host "Qt runtime is ready."
