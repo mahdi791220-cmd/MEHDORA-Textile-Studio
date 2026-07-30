@@ -5,6 +5,20 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PIL import Image
+try:
+    from .color_engine import (
+        analyze_colors,
+        apply_colorway,
+        create_colorway_targets,
+        extract_reference_palette,
+    )
+except ImportError:
+    from color_engine import (
+        analyze_colors,
+        apply_colorway,
+        create_colorway_targets,
+        extract_reference_palette,
+    )
 from PySide6.QtCore import Qt, QSize, QPoint
 from PySide6.QtGui import (
     QAction, QColor, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap
@@ -19,7 +33,7 @@ from PySide6.QtWidgets import (
 
 
 APP_NAME = "MEHDORA Textile Studio"
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 
 DEFAULT_PALETTE = [
     "#173B5F", "#168C86", "#D2A33A", "#D66B73",
@@ -54,60 +68,7 @@ def rgb_tuple(color):
 
 
 def detect_dominant_colors(rgba, count):
-    image = Image.fromarray(rgba, "RGBA")
-    image.thumbnail((360, 360), Image.Resampling.LANCZOS)
-    pixels = np.asarray(image, dtype=np.uint8).reshape(-1, 4)
-    pixels = pixels[pixels[:, 3] > 24, :3]
-    if len(pixels) == 0:
-        return []
-    if len(pixels) > 24000:
-        step = max(1, len(pixels) // 24000)
-        pixels = pixels[::step]
-    lab_pixels = cv2.cvtColor(
-        pixels.reshape(-1, 1, 3), cv2.COLOR_RGB2LAB
-    ).reshape(-1, 3).astype(np.float32)
-    unique = np.unique(lab_pixels, axis=0)
-    count = min(count, len(unique))
-    centers = unique[np.linspace(0, len(unique) - 1, count).astype(int)]
-    for _ in range(15):
-        distances = ((lab_pixels[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2)
-        labels = distances.argmin(axis=1)
-        next_centers = centers.copy()
-        for index in range(count):
-            group = lab_pixels[labels == index]
-            if len(group):
-                next_centers[index] = group.mean(axis=0)
-        if np.allclose(centers, next_centers, atol=0.5):
-            centers = next_centers
-            break
-        centers = next_centers
-    distances = ((lab_pixels[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2)
-    labels = distances.argmin(axis=1)
-    population = np.bincount(labels, minlength=count)
-    order = np.argsort(population)[::-1]
-    ordered_lab = np.clip(centers[order], 0, 255).astype(np.uint8)
-    ordered_rgb = cv2.cvtColor(
-        ordered_lab.reshape(-1, 1, 3), cv2.COLOR_LAB2RGB
-    ).reshape(-1, 3)
-    return [tuple(color) for color in ordered_rgb]
-
-
-def apply_colorway(rgba, sources, targets):
-    rgb = rgba[:, :, :3].astype(np.float32)
-    alpha = rgba[:, :, 3:4].copy()
-    source = np.asarray(sources, dtype=np.float32)
-    target = np.asarray(targets, dtype=np.float32)
-    flat = rgb.reshape(-1, 3)
-    distances = ((flat[:, None, :] - source[None, :, :]) ** 2).sum(axis=2)
-    labels = distances.argmin(axis=1)
-
-    weights = np.asarray([0.2126, 0.7152, 0.0722], dtype=np.float32)
-    source_luma = source @ weights
-    pixel_luma = flat @ weights
-    delta = pixel_luma - source_luma[labels]
-    recolored = target[labels] + delta[:, None]
-    recolored = np.clip(recolored, 0, 255).astype(np.uint8).reshape(rgb.shape)
-    return np.concatenate((recolored, alpha), axis=2)
+    return [cluster.rgb for cluster in analyze_colors(rgba, count)]
 
 
 class ImageSizeDialog(QDialog):
@@ -722,6 +683,10 @@ class MehdoraWindow(QMainWindow):
         apply_button.clicked.connect(self.generate_auto_colorways)
         layout.addWidget(apply_button)
 
+        self.vivid_colors = QCheckBox("Vivid Colors — stronger print color")
+        self.vivid_colors.setChecked(True)
+        layout.addWidget(self.vivid_colors)
+
         layout.addSpacing(12)
         layout.addWidget(QLabel("WORK HISTORY"))
         self.layer_list = QListWidget()
@@ -814,7 +779,7 @@ class MehdoraWindow(QMainWindow):
                 palette_rgba = np.array(image.convert("RGBA"), dtype=np.uint8)
             if not self.sources:
                 self.detect_colors()
-            palette = detect_dominant_colors(
+            palette = extract_reference_palette(
                 palette_rgba, max(2, len(self.sources))
             )
         except Exception as error:
@@ -831,22 +796,12 @@ class MehdoraWindow(QMainWindow):
 
     def automatic_targets(self, index):
         if self.customer_palette:
-            base = [QColor(*color).name() for color in self.customer_palette]
-            cycle = index
+            base = self.customer_palette
         else:
-            base = COLORWAY_PALETTES[index % len(COLORWAY_PALETTES)]
-            cycle = index // len(COLORWAY_PALETTES)
-        rotation = (index * 3 + cycle) % len(base)
-        rotated = base[rotation:] + base[:rotation]
-        factor = 0.92 + (cycle % 5) * 0.04
-        targets = []
-        for position in range(len(self.sources)):
-            color = QColor(rotated[position % len(rotated)])
-            red = max(0, min(255, int(color.red() * factor)))
-            green = max(0, min(255, int(color.green() * factor)))
-            blue = max(0, min(255, int(color.blue() * factor)))
-            targets.append((red, green, blue))
-        return targets
+            selected = COLORWAY_PALETTES[index % len(COLORWAY_PALETTES)]
+            base = [rgb_tuple(QColor(color)) for color in selected]
+        variant = index if self.customer_palette else index // len(COLORWAY_PALETTES)
+        return create_colorway_targets(self.sources, base, variant)
 
     def generate_auto_colorways(self):
         if self.original is None:
@@ -866,7 +821,7 @@ class MehdoraWindow(QMainWindow):
         try:
             for index in range(count):
                 targets = self.automatic_targets(index)
-                preview = apply_colorway(preview_rgba, self.sources, targets)
+                preview = self.render_colorway(preview_rgba, targets)
                 pixmap = QPixmap.fromImage(qimage_from_rgba(preview))
                 item = QListWidgetItem(
                     QIcon(pixmap), f"CW-{index + 1:03d}"
@@ -890,7 +845,7 @@ class MehdoraWindow(QMainWindow):
         targets = self.colorway_recipes[row]
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            self.current = apply_colorway(self.original, self.sources, targets)
+            self.current = self.render_colorway(self.original, targets)
         finally:
             QApplication.restoreOverrideCursor()
         for index, (_, target) in enumerate(self.color_rows):
@@ -913,7 +868,7 @@ class MehdoraWindow(QMainWindow):
         targets = [rgb_tuple(target.color()) for _, target in self.color_rows]
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            result = apply_colorway(self.original, self.sources, targets)
+            result = self.render_colorway(self.original, targets)
         except Exception as error:
             QMessageBox.critical(self, APP_NAME, f"Colorway failed:\n{error}")
             return
@@ -927,6 +882,27 @@ class MehdoraWindow(QMainWindow):
         self.canvas.set_image(self.current)
         self.canvas.fit()
         self.statusBar().showMessage(f"{name} created — original preserved")
+
+    def render_colorway(self, rgba, targets):
+        if self.vivid_colors.isChecked():
+            return apply_colorway(
+                rgba,
+                self.sources,
+                targets,
+                texture=1.0,
+                chroma_detail=1.0,
+                edge_softness=0.12,
+                vibrance=1.16,
+            )
+        return apply_colorway(
+            rgba,
+            self.sources,
+            targets,
+            texture=1.0,
+            chroma_detail=1.0,
+            edge_softness=0.18,
+            vibrance=1.03,
+        )
 
     def refresh_layers(self):
         self.layer_list.clear()

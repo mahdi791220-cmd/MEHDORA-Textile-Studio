@@ -18,6 +18,23 @@ Open **Actions → Build MEHDORA Windows → Run workflow**. The workflow:
 The build intentionally remains unsigned until a Windows code-signing
 certificate is configured.
 
+## Standalone colorway engine
+
+The independent Windows application lives in `standalone/`. Version 0.4 uses a
+CIE Lab colorway engine that:
+
+- preserves print texture, shading, alpha and fine within-color variation;
+- assigns palette colors by light/dark role instead of random RGB replacement;
+- softens transitions at color-family boundaries to avoid contour banding;
+- processes large print files in bounded-memory strips; and
+- creates deterministic, diverse automatic colorway recipes.
+
+Run the engine tests with:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
 ## License
 
 MEHDORA Textile Studio is a modified Krita distribution and remains subject to
