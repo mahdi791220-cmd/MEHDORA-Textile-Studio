@@ -7,22 +7,36 @@ import numpy as np
 from PIL import Image
 from PySide6.QtCore import Qt, QSize, QPoint
 from PySide6.QtGui import (
-    QAction, QColor, QImage, QKeySequence, QPainter, QPen, QPixmap
+    QAction, QColor, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap
 )
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QColorDialog, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
-    QListWidget, QMainWindow, QMessageBox, QPushButton, QScrollArea, QSpinBox,
-    QSplitter, QStatusBar, QToolBar, QVBoxLayout, QWidget
+    QListView, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
+    QPushButton, QScrollArea, QSpinBox, QSplitter, QStatusBar, QToolBar,
+    QVBoxLayout, QWidget
 )
 
 
 APP_NAME = "MEHDORA Textile Studio"
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.3.0"
 
 DEFAULT_PALETTE = [
     "#173B5F", "#168C86", "#D2A33A", "#D66B73",
     "#71813B", "#EEE3CD", "#674C90", "#973C49",
+]
+
+COLORWAY_PALETTES = [
+    ["#F1E6D2", "#173B5F", "#168C86", "#D2A33A", "#D66B73", "#71813B", "#674C90", "#973C49"],
+    ["#F4EBDD", "#243A73", "#547AA5", "#D9A441", "#B84A62", "#65743A", "#8B6D9C", "#3A2D44"],
+    ["#E8DDC8", "#6B1F2B", "#A3414A", "#D59A52", "#2E5C55", "#7A8C64", "#392F4A", "#C7775D"],
+    ["#E5E1D5", "#123F46", "#1F7770", "#75A09A", "#C69A42", "#8B3C46", "#57416C", "#9B7653"],
+    ["#EFE5D2", "#313B2C", "#697A3D", "#A7A36D", "#C98855", "#8D4145", "#3B566A", "#D5B66A"],
+    ["#EDE3DA", "#222A4A", "#3C5A8A", "#718FB4", "#B9804A", "#A64B55", "#665179", "#D1A86A"],
+    ["#F2E7D8", "#4A2635", "#8E3E55", "#C85D65", "#D3A04E", "#3D6A5B", "#6F8B69", "#34485D"],
+    ["#E6E0D4", "#24272C", "#4A555F", "#7D8D91", "#B38851", "#7B3E45", "#3E665F", "#B0A071"],
+    ["#F0E2C9", "#164C63", "#23859A", "#63AEB0", "#D19A45", "#C35F51", "#667B40", "#5C426C"],
+    ["#E9DED1", "#3B2148", "#754B7D", "#A7799B", "#C9954C", "#9B4B47", "#42665B", "#74864A"],
 ]
 
 
@@ -49,28 +63,33 @@ def detect_dominant_colors(rgba, count):
     if len(pixels) > 24000:
         step = max(1, len(pixels) // 24000)
         pixels = pixels[::step]
-    unique = np.unique(pixels, axis=0)
+    lab_pixels = cv2.cvtColor(
+        pixels.reshape(-1, 1, 3), cv2.COLOR_RGB2LAB
+    ).reshape(-1, 3).astype(np.float32)
+    unique = np.unique(lab_pixels, axis=0)
     count = min(count, len(unique))
-    centers = unique[np.linspace(0, len(unique) - 1, count).astype(int)].astype(
-        np.float32
-    )
+    centers = unique[np.linspace(0, len(unique) - 1, count).astype(int)]
     for _ in range(15):
-        distances = ((pixels[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2)
+        distances = ((lab_pixels[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2)
         labels = distances.argmin(axis=1)
         next_centers = centers.copy()
         for index in range(count):
-            group = pixels[labels == index]
+            group = lab_pixels[labels == index]
             if len(group):
                 next_centers[index] = group.mean(axis=0)
         if np.allclose(centers, next_centers, atol=0.5):
             centers = next_centers
             break
         centers = next_centers
-    distances = ((pixels[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2)
+    distances = ((lab_pixels[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2)
     labels = distances.argmin(axis=1)
     population = np.bincount(labels, minlength=count)
     order = np.argsort(population)[::-1]
-    return [tuple(np.clip(centers[i], 0, 255).astype(np.uint8)) for i in order]
+    ordered_lab = np.clip(centers[order], 0, 255).astype(np.uint8)
+    ordered_rgb = cv2.cvtColor(
+        ordered_lab.reshape(-1, 1, 3), cv2.COLOR_LAB2RGB
+    ).reshape(-1, 3)
+    return [tuple(color) for color in ordered_rgb]
 
 
 def apply_colorway(rgba, sources, targets):
@@ -516,6 +535,8 @@ class MehdoraWindow(QMainWindow):
         self.source_dpi = (300, 300)
         self.sources = []
         self.color_rows = []
+        self.colorway_recipes = []
+        self.customer_palette = []
         self.build_ui()
 
     def build_ui(self):
@@ -539,10 +560,9 @@ class MehdoraWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.build_left_panel())
-        self.canvas = Canvas()
-        splitter.addWidget(self.canvas)
+        splitter.addWidget(self.build_center_panel())
         splitter.addWidget(self.build_right_panel())
-        splitter.setSizes([210, 950, 300])
+        splitter.setSizes([210, 1020, 330])
         self.setCentralWidget(splitter)
 
         status = QStatusBar()
@@ -564,6 +584,11 @@ class MehdoraWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
+        design_menu = self.menuBar().addMenu("&Design")
+        design_menu.addAction("Analyze Colors", self.detect_colors)
+        design_menu.addAction("Import Customer Palette…", self.import_palette)
+        design_menu.addAction("Generate Automatic Colorways", self.generate_auto_colorways)
+
         view_menu = self.menuBar().addMenu("&View")
         view_menu.addAction("Zoom In", self.zoom_in, QKeySequence.StandardKey.ZoomIn)
         view_menu.addAction("Zoom Out", self.zoom_out, QKeySequence.StandardKey.ZoomOut)
@@ -572,19 +597,8 @@ class MehdoraWindow(QMainWindow):
         color_menu = self.menuBar().addMenu("&Colorway")
         color_menu.addAction("Detect Colors", self.detect_colors)
         color_menu.addAction("Apply Colorway", self.make_colorway)
-        color_menu.addAction("Restore Original", self.restore_original)
-
-        image_menu = self.menuBar().addMenu("&Image")
-        image_size = QAction("Image Size…", self)
-        image_size.setShortcut("Alt+Ctrl+I")
-        image_size.triggered.connect(self.image_size)
-        image_menu.addAction(image_size)
-
-        tools_menu = self.menuBar().addMenu("&Tools")
-        remove_action = QAction("Remove Tool…", self)
-        remove_action.setShortcut("J")
-        remove_action.triggered.connect(self.remove_tool)
-        tools_menu.addAction(remove_action)
+        color_menu.addAction("Generate Batch", self.generate_auto_colorways)
+        color_menu.addAction("Export Selected…", self.save_as)
 
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction("About MEHDORA", self.about)
@@ -595,13 +609,11 @@ class MehdoraWindow(QMainWindow):
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
         toolbar.addAction("Open", self.open_image)
-        toolbar.addAction("Save As", self.save_as)
+        toolbar.addAction("Export", self.save_as)
         toolbar.addSeparator()
-        toolbar.addAction("Image Size", self.image_size)
-        toolbar.addAction("Remove Tool", self.remove_tool)
-        toolbar.addSeparator()
-        toolbar.addAction("Detect Colors", self.detect_colors)
-        toolbar.addAction("Apply Colorway", self.make_colorway)
+        toolbar.addAction("Analyze", self.detect_colors)
+        toolbar.addAction("Import Palette", self.import_palette)
+        toolbar.addAction("Auto Colorways", self.generate_auto_colorways)
         toolbar.addSeparator()
         toolbar.addAction("−", self.zoom_out)
         toolbar.addAction("+", self.zoom_in)
@@ -624,23 +636,45 @@ class MehdoraWindow(QMainWindow):
         layout.addWidget(subtitle)
         layout.addSpacing(18)
         for text, callback in [
-            ("Open Design", self.open_image),
-            ("Image Size", self.image_size),
-            ("Remove Tool", self.remove_tool),
-            ("Detect Colors", self.detect_colors),
-            ("Apply Colorway", self.make_colorway),
-            ("Restore Original", self.restore_original),
-            ("Save Output", self.save_as),
+            ("OPEN DESIGN", self.open_image),
+            ("ANALYZE COLORS", self.detect_colors),
+            ("IMPORT PALETTE", self.import_palette),
+            ("AUTO COLORWAYS", self.generate_auto_colorways),
+            ("EXPORT SELECTED", self.save_as),
         ]:
             button = QPushButton(text)
             button.setMinimumHeight(38)
             button.clicked.connect(callback)
             layout.addWidget(button)
         layout.addStretch()
-        version = QLabel(f"Independent Edition {APP_VERSION}\nOffline • Windows")
+        version = QLabel(f"COLORWAY ENGINE {APP_VERSION}\nOffline • Windows")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         version.setStyleSheet("color:#777780;font-size:11px;padding:12px;")
         layout.addWidget(version)
+        return panel
+
+    def build_center_panel(self):
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.canvas = Canvas()
+        layout.addWidget(self.canvas, 4)
+        strip_title = QLabel("AUTOMATIC COLORWAYS")
+        strip_title.setStyleSheet(
+            "font-weight:800;color:#D3A052;padding:7px 10px;"
+            "border-top:1px solid #3F3F45;"
+        )
+        layout.addWidget(strip_title)
+        self.colorway_list = QListWidget()
+        self.colorway_list.setViewMode(QListView.ViewMode.IconMode)
+        self.colorway_list.setFlow(QListView.Flow.LeftToRight)
+        self.colorway_list.setWrapping(False)
+        self.colorway_list.setResizeMode(QListView.ResizeMode.Adjust)
+        self.colorway_list.setIconSize(QSize(110, 150))
+        self.colorway_list.setGridSize(QSize(135, 185))
+        self.colorway_list.setMaximumHeight(215)
+        self.colorway_list.itemClicked.connect(self.open_colorway_recipe)
+        layout.addWidget(self.colorway_list)
         return panel
 
     def build_right_panel(self):
@@ -664,20 +698,32 @@ class MehdoraWindow(QMainWindow):
         self.palette_layout = QVBoxLayout()
         layout.addLayout(self.palette_layout)
 
-        detect = QPushButton("Detect from Image")
+        detect = QPushButton("ANALYZE DESIGN")
         detect.clicked.connect(self.detect_colors)
         layout.addWidget(detect)
-        apply_button = QPushButton("CREATE COLORWAY")
+        import_button = QPushButton("IMPORT CUSTOMER PALETTE")
+        import_button.clicked.connect(self.import_palette)
+        layout.addWidget(import_button)
+
+        auto_row = QHBoxLayout()
+        auto_row.addWidget(QLabel("Automatic outputs"))
+        self.auto_count = QSpinBox()
+        self.auto_count.setRange(1, 250)
+        self.auto_count.setValue(12)
+        auto_row.addWidget(self.auto_count)
+        layout.addLayout(auto_row)
+
+        apply_button = QPushButton("GENERATE COLORWAYS")
         apply_button.setMinimumHeight(42)
         apply_button.setStyleSheet(
             "QPushButton{background:#A66F2E;color:white;font-weight:800;"
             "border-radius:6px;} QPushButton:hover{background:#C08339;}"
         )
-        apply_button.clicked.connect(self.make_colorway)
+        apply_button.clicked.connect(self.generate_auto_colorways)
         layout.addWidget(apply_button)
 
         layout.addSpacing(12)
-        layout.addWidget(QLabel("LAYERS"))
+        layout.addWidget(QLabel("WORK HISTORY"))
         self.layer_list = QListWidget()
         layout.addWidget(self.layer_list)
         layout.addStretch()
@@ -720,6 +766,9 @@ class MehdoraWindow(QMainWindow):
         self.canvas.fit()
         self.clear_palette()
         self.sources = []
+        self.colorway_recipes = []
+        self.customer_palette = []
+        self.colorway_list.clear()
         height, width, _ = rgba.shape
         self.statusBar().showMessage(
             f"{self.source_path.name} — {width} × {height}px"
@@ -747,6 +796,111 @@ class MehdoraWindow(QMainWindow):
             self.palette_layout.addLayout(row)
             self.color_rows.append((source_button, target_button))
         self.statusBar().showMessage(f"Detected {len(self.sources)} dominant colors")
+
+    def import_palette(self):
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Customer Palette",
+            "",
+            "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp)",
+        )
+        if not filename:
+            return
+        if self.original is None:
+            QMessageBox.information(self, APP_NAME, "Open a design first.")
+            return
+        try:
+            with Image.open(filename) as image:
+                palette_rgba = np.array(image.convert("RGBA"), dtype=np.uint8)
+            if not self.sources:
+                self.detect_colors()
+            palette = detect_dominant_colors(
+                palette_rgba, max(2, len(self.sources))
+            )
+        except Exception as error:
+            QMessageBox.critical(self, APP_NAME, f"Could not read palette:\n{error}")
+            return
+        if not palette:
+            return
+        for index, (_, target) in enumerate(self.color_rows):
+            target.set_color(QColor(*palette[index % len(palette)]))
+        self.customer_palette = list(palette)
+        self.statusBar().showMessage(
+            f"Customer palette imported — {len(palette)} colors"
+        )
+
+    def automatic_targets(self, index):
+        if self.customer_palette:
+            base = [QColor(*color).name() for color in self.customer_palette]
+            cycle = index
+        else:
+            base = COLORWAY_PALETTES[index % len(COLORWAY_PALETTES)]
+            cycle = index // len(COLORWAY_PALETTES)
+        rotation = (index * 3 + cycle) % len(base)
+        rotated = base[rotation:] + base[:rotation]
+        factor = 0.92 + (cycle % 5) * 0.04
+        targets = []
+        for position in range(len(self.sources)):
+            color = QColor(rotated[position % len(rotated)])
+            red = max(0, min(255, int(color.red() * factor)))
+            green = max(0, min(255, int(color.green() * factor)))
+            blue = max(0, min(255, int(color.blue() * factor)))
+            targets.append((red, green, blue))
+        return targets
+
+    def generate_auto_colorways(self):
+        if self.original is None:
+            QMessageBox.information(self, APP_NAME, "Open a design first.")
+            return
+        if not self.sources:
+            self.detect_colors()
+            if not self.sources:
+                return
+        count = self.auto_count.value()
+        self.colorway_list.clear()
+        self.colorway_recipes = []
+        preview_image = Image.fromarray(self.original, "RGBA")
+        preview_image.thumbnail((150, 170), Image.Resampling.LANCZOS)
+        preview_rgba = np.array(preview_image, dtype=np.uint8)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for index in range(count):
+                targets = self.automatic_targets(index)
+                preview = apply_colorway(preview_rgba, self.sources, targets)
+                pixmap = QPixmap.fromImage(qimage_from_rgba(preview))
+                item = QListWidgetItem(
+                    QIcon(pixmap), f"CW-{index + 1:03d}"
+                )
+                item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
+                self.colorway_list.addItem(item)
+                self.colorway_recipes.append(targets)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if self.colorway_list.count():
+            self.colorway_list.setCurrentRow(0)
+            self.open_colorway_recipe(self.colorway_list.item(0))
+        self.statusBar().showMessage(
+            f"{count} automatic colorways generated as lightweight recipes"
+        )
+
+    def open_colorway_recipe(self, item):
+        row = self.colorway_list.row(item)
+        if row < 0 or row >= len(self.colorway_recipes):
+            return
+        targets = self.colorway_recipes[row]
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self.current = apply_colorway(self.original, self.sources, targets)
+        finally:
+            QApplication.restoreOverrideCursor()
+        for index, (_, target) in enumerate(self.color_rows):
+            if index < len(targets):
+                target.set_color(QColor(*targets[index]))
+        self.canvas.set_image(self.current)
+        self.canvas.fit()
+        self.statusBar().showMessage(
+            f"CW-{row + 1:03d} rendered at original dimensions and DPI"
+        )
 
     def make_colorway(self):
         if self.original is None:
