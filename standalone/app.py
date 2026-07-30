@@ -11,6 +11,8 @@ try:
         apply_colorway,
         create_colorway_targets,
         extract_reference_palette,
+        prepare_colorway,
+        render_prepared_colorway,
     )
 except ImportError:
     from color_engine import (
@@ -18,6 +20,8 @@ except ImportError:
         apply_colorway,
         create_colorway_targets,
         extract_reference_palette,
+        prepare_colorway,
+        render_prepared_colorway,
     )
 from PySide6.QtCore import Qt, QSize, QPoint
 from PySide6.QtGui import (
@@ -33,7 +37,7 @@ from PySide6.QtWidgets import (
 
 
 APP_NAME = "MEHDORA Textile Studio"
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.4.2"
 
 DEFAULT_PALETTE = [
     "#173B5F", "#168C86", "#D2A33A", "#D66B73",
@@ -498,6 +502,7 @@ class MehdoraWindow(QMainWindow):
         self.color_rows = []
         self.colorway_recipes = []
         self.customer_palette = []
+        self.prepared_colorway = None
         self.build_ui()
 
     def build_ui(self):
@@ -559,6 +564,7 @@ class MehdoraWindow(QMainWindow):
         color_menu.addAction("Detect Colors", self.detect_colors)
         color_menu.addAction("Apply Colorway", self.make_colorway)
         color_menu.addAction("Generate Batch", self.generate_auto_colorways)
+        color_menu.addAction("Save All Colorways…", self.save_all_colorways)
         color_menu.addAction("Export Selected…", self.save_as)
 
         help_menu = self.menuBar().addMenu("&Help")
@@ -601,6 +607,7 @@ class MehdoraWindow(QMainWindow):
             ("ANALYZE COLORS", self.detect_colors),
             ("IMPORT PALETTE", self.import_palette),
             ("AUTO COLORWAYS", self.generate_auto_colorways),
+            ("SAVE ALL COLORWAYS", self.save_all_colorways),
             ("EXPORT SELECTED", self.save_as),
         ]:
             button = QPushButton(text)
@@ -737,6 +744,7 @@ class MehdoraWindow(QMainWindow):
         self.sources = []
         self.colorway_recipes = []
         self.customer_palette = []
+        self.prepared_colorway = None
         self.colorway_list.clear()
         height, width, _ = rgba.shape
         self.statusBar().showMessage(
@@ -752,6 +760,7 @@ class MehdoraWindow(QMainWindow):
             self.sources = detect_dominant_colors(
                 self.original, self.color_count.value()
             )
+            self.prepared_colorway = None
         finally:
             QApplication.restoreOverrideCursor()
         self.clear_palette()
@@ -830,7 +839,7 @@ class MehdoraWindow(QMainWindow):
         try:
             for index in range(count):
                 targets = self.automatic_targets(index)
-                preview = self.render_colorway(preview_rgba, targets)
+                preview = self.render_colorway(preview_rgba, targets, use_cache=False)
                 pixmap = QPixmap.fromImage(qimage_from_rgba(preview))
                 item = QListWidgetItem(
                     QIcon(pixmap), f"CW-{index + 1:03d}"
@@ -892,14 +901,30 @@ class MehdoraWindow(QMainWindow):
         self.canvas.fit()
         self.statusBar().showMessage(f"{name} created — original preserved")
 
-    def render_colorway(self, rgba, targets):
+    def render_colorway(self, rgba, targets, use_cache=True):
+        if use_cache and rgba is self.original:
+            if self.prepared_colorway is None:
+                self.statusBar().showMessage(
+                    "Preparing fast colorway cache — this happens once per design"
+                )
+                QApplication.processEvents()
+                self.prepared_colorway = prepare_colorway(
+                    self.original, self.sources, edge_softness=0.12
+                )
+            return render_prepared_colorway(
+                self.prepared_colorway,
+                targets,
+                texture=1.0,
+                chroma_detail=0.42 if self.vivid_colors.isChecked() else 0.30,
+                vibrance=1.16 if self.vivid_colors.isChecked() else 1.03,
+            )
         if self.vivid_colors.isChecked():
             return apply_colorway(
                 rgba,
                 self.sources,
                 targets,
                 texture=1.0,
-                chroma_detail=1.0,
+                chroma_detail=0.42,
                 edge_softness=0.12,
                 vibrance=1.16,
             )
@@ -908,9 +933,51 @@ class MehdoraWindow(QMainWindow):
             self.sources,
             targets,
             texture=1.0,
-            chroma_detail=1.0,
+            chroma_detail=0.30,
             edge_softness=0.18,
             vibrance=1.03,
+        )
+
+    def save_all_colorways(self):
+        if self.original is None:
+            QMessageBox.information(self, APP_NAME, "Open a design first.")
+            return
+        if not self.colorway_recipes:
+            self.generate_auto_colorways()
+            if not self.colorway_recipes:
+                return
+        folder = QFileDialog.getExistingDirectory(
+            self, "Choose Folder for All Colorways"
+        )
+        if not folder:
+            return
+        stem = self.source_path.stem if self.source_path else "MEHDORA"
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for index, targets in enumerate(self.colorway_recipes, 1):
+                self.statusBar().showMessage(
+                    f"Saving colorway {index} of {len(self.colorway_recipes)}…"
+                )
+                QApplication.processEvents()
+                result = self.render_colorway(self.original, targets)
+                destination = Path(folder) / f"{stem}-CW-{index:03d}.png"
+                Image.fromarray(result, "RGBA").save(
+                    destination, dpi=self.source_dpi
+                )
+        except Exception as error:
+            QMessageBox.critical(
+                self, APP_NAME, f"Could not save all colorways:\n{error}"
+            )
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.statusBar().showMessage(
+            f"Saved {len(self.colorway_recipes)} colorways to {folder}"
+        )
+        QMessageBox.information(
+            self,
+            APP_NAME,
+            f"Saved {len(self.colorway_recipes)} colorways successfully.",
         )
 
     def refresh_layers(self):

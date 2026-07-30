@@ -7,6 +7,8 @@ from standalone.color_engine import (
     apply_colorway,
     create_colorway_targets,
     extract_reference_palette,
+    prepare_colorway,
+    render_prepared_colorway,
     rgb_to_lab,
 )
 
@@ -68,6 +70,20 @@ class ColorEngineTests(unittest.TestCase):
         target_l = rgb_to_lab(np.asarray(targets, dtype=np.uint8))[:, 0]
         self.assertGreater(target_l[0], 65)
         self.assertGreater(np.corrcoef(source_l, target_l)[0, 1], 0.98)
+
+    def test_prepared_render_matches_direct_render(self):
+        rng = np.random.default_rng(7)
+        rgba = rng.integers(0, 256, size=(32, 24, 4), dtype=np.uint8)
+        sources = [(25, 35, 80), (190, 80, 55), (235, 225, 195)]
+        targets = [(20, 90, 120), (180, 55, 95), (245, 220, 150)]
+        direct = apply_colorway(rgba, sources, targets)
+        prepared = prepare_colorway(rgba, sources)
+        cached = render_prepared_colorway(prepared, targets)
+        difference = np.abs(
+            direct[:, :, :3].astype(np.int16) - cached[:, :, :3].astype(np.int16)
+        )
+        self.assertLessEqual(int(difference.max()), 2)
+        self.assertTrue(np.array_equal(direct[:, :, 3], cached[:, :, 3]))
 
 
 if __name__ == "__main__":

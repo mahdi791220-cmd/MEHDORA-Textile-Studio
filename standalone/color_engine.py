@@ -11,13 +11,22 @@ from dataclasses import dataclass
 from typing import Iterable, Sequence
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter
 
 
 @dataclass(frozen=True)
 class ColorCluster:
     rgb: tuple[int, int, int]
     population: int
+
+
+@dataclass
+class PreparedColorway:
+    lab: np.ndarray
+    alpha: np.ndarray
+    source_lab: np.ndarray
+    pair_indices: np.ndarray
+    pair_weights: np.ndarray
 
 
 def rgb_to_lab(rgb: np.ndarray) -> np.ndarray:
@@ -171,10 +180,11 @@ def apply_colorway(
     targets: Sequence[Sequence[int]],
     *,
     texture: float = 1.0,
-    chroma_detail: float = 1.0,
+    chroma_detail: float = 0.42,
     edge_softness: float = 0.12,
     vibrance: float = 1.16,
     chunk_rows: int = 512,
+    clean_color_noise: bool = True,
 ) -> np.ndarray:
     """Map source colour families to targets while retaining design detail.
 
@@ -194,6 +204,14 @@ def apply_colorway(
     output = np.empty_like(rgba)
     output[:, :, 3] = rgba[:, :, 3]
     chunk_rows = max(1, int(chunk_rows))
+    classification_rgb = rgba[:, :, :3]
+    if clean_color_noise:
+        classification_rgb = np.asarray(
+            Image.fromarray(classification_rgb, "RGB").filter(
+                ImageFilter.MedianFilter(size=3)
+            ),
+            dtype=np.uint8,
+        )
 
     # Distance matrices are the largest temporary allocation. Processing in
     # strips keeps print-scale textile files from multiplying memory usage by
@@ -203,7 +221,12 @@ def apply_colorway(
         original_rgb = np.ascontiguousarray(rgba[top:bottom, :, :3])
         pixel_lab = rgb_to_lab(original_rgb)
         flat = pixel_lab.reshape(-1, 3)
-        distances = ((flat[:, None, :] - source_lab[None, :, :]) ** 2).sum(axis=2)
+        classification_lab = rgb_to_lab(
+            np.ascontiguousarray(classification_rgb[top:bottom])
+        ).reshape(-1, 3)
+        distances = (
+            (classification_lab[:, None, :] - source_lab[None, :, :]) ** 2
+        ).sum(axis=2)
         if len(sources) > 1 and edge_softness > 0:
             sigma = 8.0 + 68.0 * float(np.clip(edge_softness, 0.0, 1.0))
             nearest_pair = np.argpartition(distances, kth=1, axis=1)[:, :2]
@@ -220,15 +243,108 @@ def apply_colorway(
             mapped_target = target_lab[nearest].copy()
 
         result_lab = mapped_target
+        result_lab[:, 1:] *= max(0.0, float(vibrance))
         result_lab[:, 0] += (flat[:, 0] - mapped_source[:, 0]) * float(texture)
         result_lab[:, 1:] += (
             flat[:, 1:] - mapped_source[:, 1:]
         ) * float(chroma_detail)
-        result_lab[:, 1:] *= max(0.0, float(vibrance))
         result_lab[:, 0] = np.clip(result_lab[:, 0], 0.0, 100.0)
         result_lab[:, 1:] = np.clip(result_lab[:, 1:], -128.0, 127.0)
         output[top:bottom, :, :3] = lab_to_rgb(
             result_lab.reshape(pixel_lab.shape)
+        )
+    return output
+
+
+def prepare_colorway(
+    rgba: np.ndarray,
+    sources: Sequence[Sequence[int]],
+    *,
+    edge_softness: float = 0.12,
+    chunk_rows: int = 512,
+) -> PreparedColorway:
+    """Analyze a full image once so subsequent colorways render quickly."""
+    if not sources:
+        raise ValueError("sources must not be empty")
+    height, width = rgba.shape[:2]
+    source_lab = _rgb_colors_to_lab(sources)
+    lab = np.empty((height, width, 3), dtype=np.float32)
+    pair_indices = np.zeros((height, width, 2), dtype=np.uint8)
+    pair_weights = np.zeros((height, width, 2), dtype=np.float16)
+    pair_weights[:, :, 0] = 1.0
+    chunk_rows = max(1, int(chunk_rows))
+    sigma = 8.0 + 68.0 * float(np.clip(edge_softness, 0.0, 1.0))
+    classification_rgb = np.asarray(
+        Image.fromarray(rgba[:, :, :3], "RGB").filter(
+            ImageFilter.MedianFilter(size=3)
+        ),
+        dtype=np.uint8,
+    )
+
+    for top in range(0, height, chunk_rows):
+        bottom = min(height, top + chunk_rows)
+        chunk_lab = rgb_to_lab(np.ascontiguousarray(rgba[top:bottom, :, :3]))
+        lab[top:bottom] = chunk_lab
+        classification_lab = rgb_to_lab(
+            np.ascontiguousarray(classification_rgb[top:bottom])
+        ).reshape(-1, 3)
+        distances = (
+            (classification_lab[:, None, :] - source_lab[None, :, :]) ** 2
+        ).sum(axis=2)
+        if len(sources) > 1:
+            indices = np.argpartition(distances, kth=1, axis=1)[:, :2]
+            selected = np.take_along_axis(distances, indices, axis=1)
+            weights = np.exp(-selected / (2.0 * sigma * sigma))
+            weights /= weights.sum(axis=1, keepdims=True) + 1e-8
+            pair_indices[top:bottom] = indices.reshape(bottom - top, width, 2)
+            pair_weights[top:bottom] = weights.reshape(bottom - top, width, 2)
+    return PreparedColorway(
+        lab=lab,
+        alpha=rgba[:, :, 3].copy(),
+        source_lab=source_lab,
+        pair_indices=pair_indices,
+        pair_weights=pair_weights,
+    )
+
+
+def render_prepared_colorway(
+    prepared: PreparedColorway,
+    targets: Sequence[Sequence[int]],
+    *,
+    texture: float = 1.0,
+    chroma_detail: float = 0.42,
+    vibrance: float = 1.16,
+    chunk_rows: int = 512,
+) -> np.ndarray:
+    """Render a target palette using cached image analysis."""
+    target_lab = _rgb_colors_to_lab(targets)
+    height, width = prepared.lab.shape[:2]
+    output = np.empty((height, width, 4), dtype=np.uint8)
+    output[:, :, 3] = prepared.alpha
+    chunk_rows = max(1, int(chunk_rows))
+    for top in range(0, height, chunk_rows):
+        bottom = min(height, top + chunk_rows)
+        flat = prepared.lab[top:bottom].reshape(-1, 3)
+        indices = prepared.pair_indices[top:bottom].reshape(-1, 2)
+        weights = prepared.pair_weights[top:bottom].astype(np.float32).reshape(-1, 2)
+        mapped_source = (
+            prepared.source_lab[indices[:, 0]] * weights[:, :1]
+            + prepared.source_lab[indices[:, 1]] * weights[:, 1:]
+        )
+        mapped_target = (
+            target_lab[indices[:, 0]] * weights[:, :1]
+            + target_lab[indices[:, 1]] * weights[:, 1:]
+        )
+        result_lab = mapped_target
+        result_lab[:, 1:] *= max(0.0, float(vibrance))
+        result_lab[:, 0] += (flat[:, 0] - mapped_source[:, 0]) * float(texture)
+        result_lab[:, 1:] += (
+            flat[:, 1:] - mapped_source[:, 1:]
+        ) * float(chroma_detail)
+        result_lab[:, 0] = np.clip(result_lab[:, 0], 0.0, 100.0)
+        result_lab[:, 1:] = np.clip(result_lab[:, 1:], -128.0, 127.0)
+        output[top:bottom, :, :3] = lab_to_rgb(
+            result_lab.reshape(bottom - top, width, 3)
         )
     return output
 
