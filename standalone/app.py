@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 
 APP_NAME = "MEHDORA Textile Studio"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.1"
 
 DEFAULT_PALETTE = [
     "#173B5F", "#168C86", "#D2A33A", "#D66B73",
@@ -574,13 +574,13 @@ class MehdoraWindow(QMainWindow):
         color_menu.addAction("Apply Colorway", self.make_colorway)
         color_menu.addAction("Restore Original", self.restore_original)
 
-        image_menu = self.menuBar().insertMenu(color_menu.menuAction(), "&Image")
+        image_menu = self.menuBar().addMenu("&Image")
         image_size = QAction("Image Size…", self)
         image_size.setShortcut("Alt+Ctrl+I")
         image_size.triggered.connect(self.image_size)
         image_menu.addAction(image_size)
 
-        tools_menu = self.menuBar().insertMenu(image_menu.menuAction(), "&Tools")
+        tools_menu = self.menuBar().addMenu("&Tools")
         remove_action = QAction("Remove Tool…", self)
         remove_action.setShortcut("J")
         remove_action.triggered.connect(self.remove_tool)
