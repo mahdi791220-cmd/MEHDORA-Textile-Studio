@@ -1,5 +1,7 @@
 $ErrorActionPreference = "Stop"
 
+Write-Host "MEHDORA Qt runtime repair V2"
+
 $installRoot = (Resolve-Path "_install").Path
 $qtBin = Join-Path $installRoot "bin"
 $qtpaths = Join-Path $qtBin "qtpaths.exe"
