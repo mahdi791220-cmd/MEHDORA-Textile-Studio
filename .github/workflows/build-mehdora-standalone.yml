@@ -31,6 +31,8 @@ jobs:
         run: |
           pyinstaller --noconfirm --clean --windowed `
             --name MEHDORA-Textile-Studio `
+            --icon standalone/assets/mehdora.ico `
+            --add-data "standalone/assets;assets" `
             --collect-all PySide6 `
             standalone/app.py
       - name: Add documentation

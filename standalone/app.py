@@ -23,7 +23,7 @@ except ImportError:
         prepare_colorway,
         render_prepared_colorway,
     )
-from PySide6.QtCore import Qt, QSize, QPoint
+from PySide6.QtCore import Qt, QSize, QPoint, QTimer
 from PySide6.QtGui import (
     QAction, QColor, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap
 )
@@ -32,12 +32,12 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QListView, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
     QPushButton, QScrollArea, QSpinBox, QSplitter, QStatusBar, QToolBar,
-    QVBoxLayout, QWidget
+    QVBoxLayout, QWidget, QSplashScreen
 )
 
 
 APP_NAME = "MEHDORA Textile Studio"
-APP_VERSION = "0.4.2"
+APP_VERSION = "0.4.3"
 
 DEFAULT_PALETTE = [
     "#173B5F", "#168C86", "#D2A33A", "#D66B73",
@@ -56,6 +56,13 @@ COLORWAY_PALETTES = [
     ["#F0E2C9", "#164C63", "#23859A", "#63AEB0", "#D19A45", "#C35F51", "#667B40", "#5C426C"],
     ["#E9DED1", "#3B2148", "#754B7D", "#A7799B", "#C9954C", "#9B4B47", "#42665B", "#74864A"],
 ]
+
+
+def resource_path(relative_path):
+    """Resolve bundled PyInstaller assets and normal source-tree assets."""
+    if hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / relative_path
+    return Path(__file__).resolve().parent / relative_path
 
 
 def qimage_from_rgba(array):
@@ -1101,8 +1108,34 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setOrganizationName("ALI AHMAD TEXTILE")
+    icon = QIcon(str(resource_path("assets/mehdora.ico")))
+    app.setWindowIcon(icon)
+
+    splash_pixmap = QPixmap(str(resource_path("assets/mehdora_splash.png")))
+    if not splash_pixmap.isNull():
+        splash_pixmap = splash_pixmap.scaled(
+            1100,
+            620,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        splash = QSplashScreen(
+            splash_pixmap, Qt.WindowType.WindowStaysOnTopHint
+        )
+        splash.show()
+        app.processEvents()
+    else:
+        splash = None
+
     window = MehdoraWindow()
-    window.show()
+    window.setWindowIcon(icon)
+
+    def show_main_window():
+        window.show()
+        if splash is not None:
+            splash.finish(window)
+
+    QTimer.singleShot(1800 if splash is not None else 0, show_main_window)
     sys.exit(app.exec())
 
 
