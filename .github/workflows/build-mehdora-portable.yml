@@ -1,0 +1,52 @@
+name: Build MEHDORA Portable
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "portable/**"
+      - ".github/workflows/build-mehdora-portable.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-portable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download stable Windows engine
+        run: |
+          curl --fail --location --retry 3 \
+            https://download.kde.org/stable/krita/6.0.3/krita-x64-6.0.3.zip \
+            --output krita-portable.zip
+          unzip -q krita-portable.zip -d engine
+      - name: Assemble MEHDORA
+        run: |
+          ENGINE_ROOT="$(find engine -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          test -n "$ENGINE_ROOT"
+          mkdir -p package/MEHDORA-Textile-Studio
+          cp -a "$ENGINE_ROOT"/. package/MEHDORA-Textile-Studio/
+          mkdir -p package/MEHDORA-Textile-Studio/share/krita/pykrita
+          cp -a portable/plugin/mehdora_color_lab \
+            package/MEHDORA-Textile-Studio/share/krita/pykrita/
+          cp portable/plugin/mehdora_color_lab.desktop \
+            package/MEHDORA-Textile-Studio/share/krita/pykrita/
+          cp portable/MEHDORA-Textile-Studio.bat \
+            package/MEHDORA-Textile-Studio/
+          cp portable/README-FA.txt package/MEHDORA-Textile-Studio/
+          cp portable/THIRD-PARTY-NOTICES.txt package/MEHDORA-Textile-Studio/
+          cd package
+          zip -qr ../MEHDORA-Textile-Studio-Windows-Portable.zip MEHDORA-Textile-Studio
+      - name: Validate package
+        run: |
+          unzip -l MEHDORA-Textile-Studio-Windows-Portable.zip | grep -q "mehdora_color_lab.py"
+          unzip -l MEHDORA-Textile-Studio-Windows-Portable.zip | grep -q "MEHDORA-Textile-Studio.bat"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MEHDORA-Textile-Studio-Windows-Portable
+          path: MEHDORA-Textile-Studio-Windows-Portable.zip
+          retention-days: 14
+          if-no-files-found: error
