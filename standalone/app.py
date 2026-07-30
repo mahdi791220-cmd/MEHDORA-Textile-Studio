@@ -1,5 +1,6 @@
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -37,7 +38,7 @@ from PySide6.QtWidgets import (
 
 
 APP_NAME = "MEHDORA Textile Studio"
-APP_VERSION = "0.4.3"
+APP_VERSION = "0.5.0"
 
 DEFAULT_PALETTE = [
     "#173B5F", "#168C86", "#D2A33A", "#D66B73",
@@ -56,6 +57,16 @@ COLORWAY_PALETTES = [
     ["#F0E2C9", "#164C63", "#23859A", "#63AEB0", "#D19A45", "#C35F51", "#667B40", "#5C426C"],
     ["#E9DED1", "#3B2148", "#754B7D", "#A7799B", "#C9954C", "#9B4B47", "#42665B", "#74864A"],
 ]
+
+
+@dataclass
+class DocumentLayer:
+    name: str
+    rgba: np.ndarray
+    visible: bool = True
+    locked: bool = False
+    opacity: int = 255
+    blend_mode: str = "normal"
 
 
 def resource_path(relative_path):
@@ -503,6 +514,9 @@ class MehdoraWindow(QMainWindow):
         self.original = None
         self.current = None
         self.layers = []
+        self.document_layers = []
+        self.document_is_layered = False
+        self.imported_layer_count = 0
         self.source_path = None
         self.source_dpi = (300, 300)
         self.sources = []
@@ -706,8 +720,22 @@ class MehdoraWindow(QMainWindow):
         layout.addWidget(self.preserve_brightness)
 
         layout.addSpacing(12)
-        layout.addWidget(QLabel("WORK HISTORY"))
+        self.layer_status = QLabel("NO DOCUMENT")
+        self.layer_status.setStyleSheet(
+            "font-weight:800;color:#D3A052;padding:5px 0;"
+        )
+        layout.addWidget(self.layer_status)
+        scope_row = QHBoxLayout()
+        scope_row.addWidget(QLabel("Color target"))
+        self.layer_scope = QComboBox()
+        self.layer_scope.addItems(["Selected Layer", "All Visible Layers"])
+        scope_row.addWidget(self.layer_scope)
+        layout.addLayout(scope_row)
+        layout.addWidget(QLabel("LAYERS"))
         self.layer_list = QListWidget()
+        self.layer_list.setIconSize(QSize(34, 44))
+        self.layer_list.itemChanged.connect(self.layer_visibility_changed)
+        self.layer_list.currentItemChanged.connect(self.layer_selection_changed)
         layout.addWidget(self.layer_list)
         layout.addStretch()
         return panel
@@ -729,14 +757,22 @@ class MehdoraWindow(QMainWindow):
             self,
             "Open Textile Design",
             "",
-            "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp)",
+            "Design Files (*.psd *.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp)",
         )
         if not filename:
             return
         try:
-            with Image.open(filename) as image:
-                self.source_dpi = image.info.get("dpi", (300, 300))
-                rgba = np.array(image.convert("RGBA"), dtype=np.uint8)
+            if Path(filename).suffix.lower() == ".psd":
+                rgba = self.open_layered_psd(filename)
+            else:
+                with Image.open(filename) as image:
+                    self.source_dpi = image.info.get("dpi", (300, 300))
+                    rgba = np.array(image.convert("RGBA"), dtype=np.uint8)
+                self.document_layers = [
+                    DocumentLayer("Background", rgba.copy())
+                ]
+                self.document_is_layered = False
+                self.imported_layer_count = 0
         except Exception as error:
             QMessageBox.critical(self, APP_NAME, f"Could not open image:\n{error}")
             return
@@ -758,14 +794,76 @@ class MehdoraWindow(QMainWindow):
             f"{self.source_path.name} — {width} × {height}px"
         )
 
+    def open_layered_psd(self, filename):
+        try:
+            from psd_tools import PSDImage
+        except ImportError as error:
+            raise RuntimeError(
+                "PSD support is not installed in this build."
+            ) from error
+
+        psd = PSDImage.open(filename)
+        composite = psd.composite()
+        if composite is None:
+            raise ValueError("The PSD has no readable composite image.")
+        rgba = np.array(composite.convert("RGBA"), dtype=np.uint8)
+        height, width, _ = rgba.shape
+        layers = []
+
+        def collect(container, prefix="", parent_visible=True):
+            for layer in container:
+                visible = parent_visible and layer.is_visible()
+                if layer.is_group():
+                    collect(layer, f"{prefix}{layer.name} / ", visible)
+                    continue
+                rendered = layer.composite(layer_filter=lambda _: True)
+                if rendered is None:
+                    continue
+                pixels = np.array(rendered.convert("RGBA"), dtype=np.uint8)
+                full = np.zeros((height, width, 4), dtype=np.uint8)
+                layer_left = int(layer.left)
+                layer_top = int(layer.top)
+                left = max(0, layer_left)
+                top = max(0, layer_top)
+                source_left = max(0, -layer_left)
+                source_top = max(0, -layer_top)
+                right = min(width, layer_left + pixels.shape[1])
+                bottom = min(height, layer_top + pixels.shape[0])
+                if right > left and bottom > top:
+                    full[top:bottom, left:right] = pixels[
+                        source_top : source_top + bottom - top,
+                        source_left : source_left + right - left,
+                    ]
+                layers.append(
+                    DocumentLayer(
+                        name=f"{prefix}{layer.name}",
+                        rgba=full,
+                        visible=visible,
+                        # Layer rendering already bakes masks, effects, opacity,
+                        # and blend appearance into the pixel representation.
+                        opacity=255,
+                        blend_mode="normal",
+                    )
+                )
+
+        collect(psd)
+        if not layers:
+            layers = [DocumentLayer("Background", rgba.copy())]
+        self.document_layers = layers
+        self.document_is_layered = len(layers) > 1
+        self.imported_layer_count = len(layers)
+        self.source_dpi = (300, 300)
+        return rgba
+
     def detect_colors(self):
         if self.current is None:
             QMessageBox.information(self, APP_NAME, "Open a design first.")
             return
+        analysis_image = self.active_color_source()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             self.sources = detect_dominant_colors(
-                self.original, self.color_count.value()
+                analysis_image, self.color_count.value()
             )
             self.prepared_colorway = None
         finally:
@@ -781,6 +879,32 @@ class MehdoraWindow(QMainWindow):
             self.palette_layout.addLayout(row)
             self.color_rows.append((source_button, target_button))
         self.statusBar().showMessage(f"Detected {len(self.sources)} dominant colors")
+
+    def active_layer_index(self):
+        item = self.layer_list.currentItem()
+        if item is None:
+            return None
+        index = item.data(Qt.ItemDataRole.UserRole)
+        if index is None or not 0 <= index < len(self.document_layers):
+            return None
+        return index
+
+    def active_color_source(self):
+        if (
+            not self.document_is_layered
+            and len(self.document_layers) == 1
+            and self.original is not None
+        ):
+            return self.original
+        if (
+            hasattr(self, "layer_scope")
+            and self.layer_scope.currentIndex() == 0
+        ):
+            index = self.active_layer_index()
+            if index is not None:
+                return self.document_layers[index].rgba
+        composed = self.compose_document_layers()
+        return composed if composed is not None else self.original
 
     def import_palette(self):
         filename, _ = QFileDialog.getOpenFileName(
@@ -839,7 +963,8 @@ class MehdoraWindow(QMainWindow):
         count = self.auto_count.value()
         self.colorway_list.clear()
         self.colorway_recipes = []
-        preview_image = Image.fromarray(self.original, "RGBA")
+        color_source = self.active_color_source()
+        preview_image = Image.fromarray(color_source, "RGBA")
         preview_image.thumbnail((150, 170), Image.Resampling.LANCZOS)
         preview_rgba = np.array(preview_image, dtype=np.uint8)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -870,7 +995,9 @@ class MehdoraWindow(QMainWindow):
         targets = self.colorway_recipes[row]
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            self.current = self.render_colorway(self.original, targets)
+            self.current = self.render_colorway(
+                self.active_color_source(), targets
+            )
         finally:
             QApplication.restoreOverrideCursor()
         for index, (_, target) in enumerate(self.color_rows):
@@ -893,17 +1020,26 @@ class MehdoraWindow(QMainWindow):
         targets = [rgb_tuple(target.color()) for _, target in self.color_rows]
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            result = self.render_colorway(self.original, targets)
+            result = self.render_colorway(self.active_color_source(), targets)
         except Exception as error:
             QMessageBox.critical(self, APP_NAME, f"Colorway failed:\n{error}")
             return
         finally:
             QApplication.restoreOverrideCursor()
-        name = f"Colorway {len(self.layers)}"
+        source_index = self.active_layer_index()
+        if self.layer_scope.currentIndex() == 0 and source_index is not None:
+            source_name = self.document_layers[source_index].name
+            name = f"{source_name} — Colorway"
+        else:
+            name = f"Colorway {len(self.layers)}"
         self.current = result
         self.layers.append((name, result.copy()))
+        self.document_layers.append(
+            DocumentLayer(name, result.copy(), visible=True)
+        )
+        self.document_is_layered = len(self.document_layers) > 1
         self.refresh_layers()
-        self.layer_list.setCurrentRow(len(self.layers) - 1)
+        self.layer_list.setCurrentRow(0)
         self.canvas.set_image(self.current)
         self.canvas.fit()
         self.statusBar().showMessage(f"{name} created — original preserved")
@@ -988,9 +1124,83 @@ class MehdoraWindow(QMainWindow):
         )
 
     def refresh_layers(self):
+        self.layer_list.blockSignals(True)
         self.layer_list.clear()
-        for name, _ in reversed(self.layers):
-            self.layer_list.addItem(name)
+        for index in range(len(self.document_layers) - 1, -1, -1):
+            layer = self.document_layers[index]
+            thumb = Image.fromarray(layer.rgba, "RGBA")
+            thumb.thumbnail((34, 44), Image.Resampling.LANCZOS)
+            pixmap = QPixmap.fromImage(
+                qimage_from_rgba(np.array(thumb, dtype=np.uint8))
+            )
+            item = QListWidgetItem(QIcon(pixmap), layer.name)
+            item.setData(Qt.ItemDataRole.UserRole, index)
+            item.setFlags(
+                item.flags()
+                | Qt.ItemFlag.ItemIsUserCheckable
+                | Qt.ItemFlag.ItemIsSelectable
+            )
+            item.setCheckState(
+                Qt.CheckState.Checked
+                if layer.visible
+                else Qt.CheckState.Unchecked
+            )
+            self.layer_list.addItem(item)
+        self.layer_list.blockSignals(False)
+        count = len(self.document_layers)
+        if self.document_is_layered:
+            self.layer_status.setText(f"LAYERED DOCUMENT — {count} LAYERS")
+        elif count:
+            self.layer_status.setText("FLATTENED IMAGE — 1 LAYER")
+        else:
+            self.layer_status.setText("NO DOCUMENT")
+        if count and self.layer_list.currentRow() < 0:
+            self.layer_list.setCurrentRow(0)
+
+    def layer_visibility_changed(self, item):
+        index = item.data(Qt.ItemDataRole.UserRole)
+        if index is None or not 0 <= index < len(self.document_layers):
+            return
+        self.document_layers[index].visible = (
+            item.checkState() == Qt.CheckState.Checked
+        )
+        self.current = self.compose_document_layers()
+        self.canvas.set_image(self.current)
+        self.statusBar().showMessage(
+            f"{self.document_layers[index].name} visibility changed"
+        )
+
+    def layer_selection_changed(self, current, previous):
+        if current is None:
+            return
+        index = current.data(Qt.ItemDataRole.UserRole)
+        if index is None or not 0 <= index < len(self.document_layers):
+            return
+        self.sources = []
+        self.prepared_colorway = None
+        self.colorway_recipes = []
+        self.colorway_list.clear()
+        self.clear_palette()
+        self.statusBar().showMessage(
+            f"Selected layer: {self.document_layers[index].name}"
+        )
+
+    def compose_document_layers(self):
+        if not self.document_layers:
+            return self.current
+        height, width, _ = self.document_layers[0].rgba.shape
+        canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        for layer in self.document_layers:
+            if not layer.visible:
+                continue
+            image = Image.fromarray(layer.rgba, "RGBA")
+            if layer.opacity < 255:
+                alpha = image.getchannel("A").point(
+                    lambda value, opacity=layer.opacity: value * opacity // 255
+                )
+                image.putalpha(alpha)
+            canvas.alpha_composite(image)
+        return np.array(canvas, dtype=np.uint8)
 
     def restore_original(self):
         if self.original is None:
@@ -1034,6 +1244,11 @@ class MehdoraWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
         self.current = result
         self.layers.append(("Image Size", result.copy()))
+        self.document_layers = [
+            DocumentLayer("Resized Composite", result.copy())
+        ]
+        self.document_is_layered = False
+        self.imported_layer_count = 0
         self.refresh_layers()
         self.canvas.set_image(self.current)
         self.canvas.fit()
@@ -1051,6 +1266,10 @@ class MehdoraWindow(QMainWindow):
             return
         self.current = dialog.result
         self.layers.append(("Remove Tool", self.current.copy()))
+        self.document_layers.append(
+            DocumentLayer("Remove Tool", self.current.copy())
+        )
+        self.document_is_layered = len(self.document_layers) > 1
         self.refresh_layers()
         self.canvas.set_image(self.current)
         self.canvas.fit()
@@ -1067,22 +1286,73 @@ class MehdoraWindow(QMainWindow):
             self,
             "Save Colorway",
             f"{stem}-MEHDORA.png",
+            "Photoshop PSD — Preserve Layers (*.psd);;"
             "PNG (*.png);;TIFF (*.tif *.tiff);;JPEG (*.jpg *.jpeg)",
         )
         if not filename:
             return
         try:
-            image = Image.fromarray(self.current, "RGBA")
             extension = Path(filename).suffix.lower()
-            if extension in (".jpg", ".jpeg"):
-                image = image.convert("RGB")
-                image.save(filename, quality=96, dpi=self.source_dpi)
+            if extension == ".psd":
+                self.save_layered_psd(filename)
             else:
-                image.save(filename, dpi=self.source_dpi)
+                image = Image.fromarray(self.current, "RGBA")
+                if extension in (".jpg", ".jpeg"):
+                    image = image.convert("RGB")
+                    image.save(filename, quality=96, dpi=self.source_dpi)
+                else:
+                    image.save(filename, dpi=self.source_dpi)
         except Exception as error:
             QMessageBox.critical(self, APP_NAME, f"Could not save image:\n{error}")
             return
         self.statusBar().showMessage(f"Saved: {filename}")
+
+    def save_layered_psd(self, filename):
+        try:
+            from psd_tools import PSDImage
+        except ImportError as error:
+            raise RuntimeError(
+                "PSD support is not installed in this build."
+            ) from error
+        if not self.document_layers:
+            raise ValueError("There are no layers to save.")
+        height, width, _ = self.document_layers[0].rgba.shape
+        preserve_source = (
+            self.source_path is not None
+            and self.source_path.suffix.lower() == ".psd"
+            and self.source_path.exists()
+            and self.imported_layer_count > 0
+        )
+        if preserve_source:
+            psd = PSDImage.open(self.source_path)
+            original_leaves = []
+
+            def collect_leaves(container):
+                for source_layer in container:
+                    if source_layer.is_group():
+                        collect_leaves(source_layer)
+                    else:
+                        original_leaves.append(source_layer)
+
+            collect_leaves(psd)
+            for index, source_layer in enumerate(original_leaves):
+                if index < self.imported_layer_count:
+                    source_layer.visible = self.document_layers[index].visible
+            layers_to_add = self.document_layers[self.imported_layer_count :]
+        else:
+            psd = PSDImage.new(mode="RGB", size=(width, height), depth=8)
+            layers_to_add = self.document_layers
+
+        for layer in layers_to_add:
+            pixel_layer = psd.create_pixel_layer(
+                Image.fromarray(layer.rgba, "RGBA"),
+                name=layer.name,
+                top=0,
+                left=0,
+                opacity=max(0, min(255, int(layer.opacity))),
+            )
+            pixel_layer.visible = layer.visible
+        psd.save(filename)
 
     def zoom_in(self):
         self.canvas.zoom_in()

@@ -34,6 +34,7 @@ jobs:
             --icon standalone/assets/mehdora.ico `
             --add-data "standalone/assets;assets" `
             --collect-all PySide6 `
+            --collect-all psd_tools `
             standalone/app.py
       - name: Add documentation
         shell: pwsh

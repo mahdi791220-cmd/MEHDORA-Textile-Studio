@@ -3,3 +3,4 @@ Pillow>=10,<13
 numpy>=1.26,<3
 opencv-python-headless>=4.10,<5
 pyinstaller>=6.10,<7
+psd-tools>=1.17.4,<2
