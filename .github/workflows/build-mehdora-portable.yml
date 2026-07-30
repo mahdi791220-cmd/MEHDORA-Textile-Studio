@@ -36,6 +36,7 @@ jobs:
           New-Item -ItemType Directory -Path $pluginRoot -Force | Out-Null
           Copy-Item portable/plugin/mehdora_color_lab $pluginRoot -Recurse -Force
           Copy-Item portable/plugin/mehdora_color_lab.desktop $pluginRoot -Force
+          Copy-Item portable/MEHDORA-Splash.png $destination -Force
           Copy-Item portable/README-FA.txt $destination -Force
           Copy-Item portable/THIRD-PARTY-NOTICES.txt $destination -Force
       - name: Build MEHDORA launcher
@@ -54,6 +55,7 @@ jobs:
           Write-Host "Launcher source: $($launcherSource.FullName)"
           & $compiler /nologo /target:winexe `
             /reference:System.Windows.Forms.dll `
+            /reference:System.Drawing.dll `
             /out:package/MEHDORA-Textile-Studio/MEHDORA-Textile-Studio.exe `
             $launcherSource.FullName
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -71,6 +73,9 @@ jobs:
           }
           if (-not (Test-Path "package/MEHDORA-Textile-Studio/share/krita/pykrita/mehdora_color_lab/mehdora_color_lab.py")) {
             throw "MEHDORA Color Lab was not packaged."
+          }
+          if (-not (Test-Path "package/MEHDORA-Textile-Studio/MEHDORA-Splash.png")) {
+            throw "MEHDORA splash image was not packaged."
           }
       - uses: actions/upload-artifact@v4
         with:
