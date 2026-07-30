@@ -13,37 +13,56 @@ permissions:
 
 jobs:
   windows-portable:
-    runs-on: ubuntu-latest
+    runs-on: windows-2022
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Download stable Windows engine
+        shell: pwsh
         run: |
-          curl --fail --location --retry 3 \
-            https://download.kde.org/stable/krita/6.0.3/krita-x64-6.0.3.zip \
-            --output krita-portable.zip
-          unzip -q krita-portable.zip -d engine
+          Invoke-WebRequest `
+            -Uri "https://download.kde.org/stable/krita/6.0.3/krita-x64-6.0.3.zip" `
+            -OutFile "engine.zip"
+          Expand-Archive engine.zip -DestinationPath engine
       - name: Assemble MEHDORA
+        shell: pwsh
         run: |
-          ENGINE_ROOT="$(find engine -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-          test -n "$ENGINE_ROOT"
-          mkdir -p package/MEHDORA-Textile-Studio
-          cp -a "$ENGINE_ROOT"/. package/MEHDORA-Textile-Studio/
-          mkdir -p package/MEHDORA-Textile-Studio/share/krita/pykrita
-          cp -a portable/plugin/mehdora_color_lab \
-            package/MEHDORA-Textile-Studio/share/krita/pykrita/
-          cp portable/plugin/mehdora_color_lab.desktop \
-            package/MEHDORA-Textile-Studio/share/krita/pykrita/
-          cp portable/MEHDORA-Textile-Studio.bat \
-            package/MEHDORA-Textile-Studio/
-          cp portable/README-FA.txt package/MEHDORA-Textile-Studio/
-          cp portable/THIRD-PARTY-NOTICES.txt package/MEHDORA-Textile-Studio/
-          cd package
-          zip -qr ../MEHDORA-Textile-Studio-Windows-Portable.zip MEHDORA-Textile-Studio
+          $engineRoot = Get-ChildItem engine -Directory | Select-Object -First 1
+          if (-not $engineRoot) { throw "Engine folder was not found." }
+          $destination = "package/MEHDORA-Textile-Studio"
+          New-Item -ItemType Directory -Path $destination -Force | Out-Null
+          Copy-Item "$($engineRoot.FullName)/*" $destination -Recurse -Force
+          $pluginRoot = "$destination/share/krita/pykrita"
+          New-Item -ItemType Directory -Path $pluginRoot -Force | Out-Null
+          Copy-Item portable/plugin/mehdora_color_lab $pluginRoot -Recurse -Force
+          Copy-Item portable/plugin/mehdora_color_lab.desktop $pluginRoot -Force
+          Copy-Item portable/README-FA.txt $destination -Force
+          Copy-Item portable/THIRD-PARTY-NOTICES.txt $destination -Force
+      - name: Build MEHDORA launcher
+        shell: pwsh
+        run: |
+          $compiler = "$env:WINDIR/Microsoft.NET/Framework64/v4.0.30319/csc.exe"
+          if (-not (Test-Path $compiler)) { throw "Windows C# compiler was not found." }
+          & $compiler /nologo /target:winexe `
+            /reference:System.Windows.Forms.dll `
+            /out:package/MEHDORA-Textile-Studio/MEHDORA-Textile-Studio.exe `
+            portable/MEHDORA-Launcher.cs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package MEHDORA
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path package/MEHDORA-Textile-Studio `
+            -DestinationPath MEHDORA-Textile-Studio-Windows-Portable.zip
       - name: Validate package
+        shell: pwsh
         run: |
-          unzip -l MEHDORA-Textile-Studio-Windows-Portable.zip | grep -q "mehdora_color_lab.py"
-          unzip -l MEHDORA-Textile-Studio-Windows-Portable.zip | grep -q "MEHDORA-Textile-Studio.bat"
+          if (-not (Test-Path "package/MEHDORA-Textile-Studio/MEHDORA-Textile-Studio.exe")) {
+            throw "MEHDORA launcher was not created."
+          }
+          if (-not (Test-Path "package/MEHDORA-Textile-Studio/share/krita/pykrita/mehdora_color_lab/mehdora_color_lab.py")) {
+            throw "MEHDORA Color Lab was not packaged."
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: MEHDORA-Textile-Studio-Windows-Portable
