@@ -237,6 +237,8 @@ def create_colorway_targets(
     sources: Sequence[Sequence[int]],
     palette: Iterable[Sequence[int]],
     variant: int,
+    *,
+    preserve_lightness: float = 0.68,
 ) -> list[tuple[int, int, int]]:
     """Create a deterministic, role-aware palette assignment.
 
@@ -269,4 +271,19 @@ def create_colorway_targets(
         else:
             palette_rank = round(rank * (len(palette_order) - 1) / (len(source_order) - 1))
         assigned[source_index] = palette_list[palette_order[palette_rank]]
+
+    # A dark reference palette should not turn a naturally airy design into a
+    # uniformly dark print. Keep each source family's original lightness role
+    # while still allowing some of the reference palette's contrast.
+    preservation = float(np.clip(preserve_lightness, 0.0, 1.0))
+    if preservation:
+        assigned_lab = _rgb_colors_to_lab(assigned)
+        assigned_lab[:, 0] = (
+            source_lab[:, 0] * preservation
+            + assigned_lab[:, 0] * (1.0 - preservation)
+        )
+        assigned = [
+            tuple(int(channel) for channel in color)
+            for color in lab_to_rgb(assigned_lab)
+        ]
     return assigned

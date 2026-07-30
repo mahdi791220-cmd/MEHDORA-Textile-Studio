@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 
 
 APP_NAME = "MEHDORA Textile Studio"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 
 DEFAULT_PALETTE = [
     "#173B5F", "#168C86", "#D2A33A", "#D66B73",
@@ -687,6 +687,10 @@ class MehdoraWindow(QMainWindow):
         self.vivid_colors.setChecked(True)
         layout.addWidget(self.vivid_colors)
 
+        self.preserve_brightness = QCheckBox("Preserve Original Brightness")
+        self.preserve_brightness.setChecked(True)
+        layout.addWidget(self.preserve_brightness)
+
         layout.addSpacing(12)
         layout.addWidget(QLabel("WORK HISTORY"))
         self.layer_list = QListWidget()
@@ -801,7 +805,12 @@ class MehdoraWindow(QMainWindow):
             selected = COLORWAY_PALETTES[index % len(COLORWAY_PALETTES)]
             base = [rgb_tuple(QColor(color)) for color in selected]
         variant = index if self.customer_palette else index // len(COLORWAY_PALETTES)
-        return create_colorway_targets(self.sources, base, variant)
+        return create_colorway_targets(
+            self.sources,
+            base,
+            variant,
+            preserve_lightness=0.68 if self.preserve_brightness.isChecked() else 0.0,
+        )
 
     def generate_auto_colorways(self):
         if self.original is None:

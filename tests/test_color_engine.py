@@ -60,6 +60,15 @@ class ColorEngineTests(unittest.TestCase):
         chroma = np.linalg.norm(lab[:, 1:], axis=1)
         self.assertGreater(np.count_nonzero(chroma > 35), 1)
 
+    def test_dark_palette_preserves_source_lightness_roles(self):
+        sources = [(235, 225, 210), (170, 155, 145), (55, 45, 50)]
+        dark_palette = [(5, 12, 45), (15, 30, 80), (35, 50, 105)]
+        targets = create_colorway_targets(sources, dark_palette, 0)
+        source_l = rgb_to_lab(np.asarray(sources, dtype=np.uint8))[:, 0]
+        target_l = rgb_to_lab(np.asarray(targets, dtype=np.uint8))[:, 0]
+        self.assertGreater(target_l[0], 65)
+        self.assertGreater(np.corrcoef(source_l, target_l)[0, 1], 0.98)
+
 
 if __name__ == "__main__":
     unittest.main()
