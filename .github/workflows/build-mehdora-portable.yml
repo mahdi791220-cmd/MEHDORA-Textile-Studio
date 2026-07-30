@@ -43,10 +43,19 @@ jobs:
         run: |
           $compiler = "$env:WINDIR/Microsoft.NET/Framework64/v4.0.30319/csc.exe"
           if (-not (Test-Path $compiler)) { throw "Windows C# compiler was not found." }
+          $launcherSource = Get-ChildItem `
+            -Path . `
+            -Filter "MEHDORA-Launcher.cs" `
+            -File `
+            -Recurse | Select-Object -First 1
+          if (-not $launcherSource) {
+            throw "MEHDORA-Launcher.cs was not found anywhere in the repository."
+          }
+          Write-Host "Launcher source: $($launcherSource.FullName)"
           & $compiler /nologo /target:winexe `
             /reference:System.Windows.Forms.dll `
             /out:package/MEHDORA-Textile-Studio/MEHDORA-Textile-Studio.exe `
-            portable/MEHDORA-Launcher.cs
+            $launcherSource.FullName
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Package MEHDORA
         shell: pwsh
