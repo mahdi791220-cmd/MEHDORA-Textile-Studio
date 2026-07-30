@@ -1,0 +1,140 @@
+name: Build MEHDORA Windows FIXED V4
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify-patches:
+    name: Verify MEHDORA patch stack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct split patches
+        run: python3 scripts/reconstruct_patches.py
+      - name: Get upstream source
+        run: git clone --depth 1 --branch v6.0.3 https://invent.kde.org/graphics/krita.git source
+      - name: Apply MEHDORA patches
+        working-directory: source
+        run: |
+          git config user.name "MEHDORA Build"
+          git config user.email "build@mehdora.app"
+          git am --3way ../patches/*.patch
+      - name: Audit MEHDORA branding
+        working-directory: source
+        run: python3 tools/verify_mehdora_branding.py
+
+  windows-installer:
+    name: Windows installer
+    needs: verify-patches
+    runs-on: windows-2022
+    timeout-minutes: 360
+    env:
+      PYTHONUTF8: "1"
+      KDECI_BUILD_TYPE: Release
+      KDECI_ONLY_BUILD: "True"
+      KDECI_COMPRESS_PACKAGES_ON_DOWNLOAD: "False"
+      KRITACI_SKIP_DEBUG_PACKAGE: "True"
+      KRITACI_BUILD_INSTALLERS: "True"
+      KRITACI_RELEASE_PACKAGE_NAMING: "True"
+      KRITACI_WINDOWS_SIGN_CONFIG: do-not-sign-mehdora.ini
+      EFFECTIVE_DEPS_REPO_BRANCH_NAME: transition.now/qt6
+      EFFECTIVE_DEPS_BRANCH_NAME: transition.now/qt6
+      KDECI_EXTRA_CMAKE_ARGS: >-
+        -DHIDE_SAFE_ASSERTS=ON
+        -DBUILD_TESTING=OFF
+        -DBUILD_WITH_QT6=ON
+        -DALLOW_UNSTABLE=QT6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct split patches
+        run: python scripts/reconstruct_patches.py
+      - name: Get upstream source
+        run: git clone --depth 1 --branch v6.0.3 https://invent.kde.org/graphics/krita.git source
+      - name: Apply MEHDORA patches
+        working-directory: source
+        shell: pwsh
+        run: |
+          git config user.name "MEHDORA Build"
+          git config user.email "build@mehdora.app"
+          $patchFiles = Get-ChildItem ../patches/*.patch | Sort-Object Name
+          foreach ($patchFile in $patchFiles) {
+            git am --3way $patchFile.FullName
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Audit MEHDORA branding
+        working-directory: source
+        run: python tools/verify_mehdora_branding.py
+      - name: Prepare KDE build tools
+        working-directory: source
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch $env:EFFECTIVE_DEPS_REPO_BRANCH_NAME https://invent.kde.org/packaging/krita-deps-management.git
+          git clone --depth 1 https://invent.kde.org/packaging/krita-ci-utilities.git krita-deps-management/ci-utilities
+          python -m pip install --upgrade pip
+          pip install -r krita-deps-management/requirements.txt
+          pip install -r build-tools/ci-scripts/requirements-windows.txt
+      - name: Generate dependency manifest
+        working-directory: source
+        shell: pwsh
+        run: |
+          python -u krita-deps-management/tools/replace-branch-in-seed-file.py krita-deps-management/latest/krita-deps.yml -p -o branch-corrected-deps.yml -d $env:EFFECTIVE_DEPS_BRANCH_NAME
+          python -u krita-deps-management/tools/generate-deps-file.py -s branch-corrected-deps.yml -o .kde-ci.yml
+      - name: Install Windows build runtimes
+        shell: pwsh
+        run: |
+          choco install ccache vcredist140 -y
+          "C:\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build MEHDORA
+        working-directory: source
+        shell: pwsh
+        env:
+          CI_PROJECT_NAME: krita
+          CI_COMMIT_REF_NAME: mehdora-base
+          CI_COMMIT_SHORT_SHA: github
+          KDECI_GITLAB_SERVER: https://invent.kde.org/
+          KDECI_PACKAGE_PROJECT: teams/ci-artifacts/krita-windows
+        run: |
+          $env:CI_PROJECT_DIR = (Get-Location).Path
+          $env:KDECI_REPO_METADATA_PATH = Join-Path $env:CI_PROJECT_DIR "krita-deps-management/repo-metadata"
+          $env:KDECI_CC_CACHE = Join-Path $env:CI_PROJECT_DIR ".cache/ccache"
+          $env:KDECI_CACHE_PATH = Join-Path $env:CI_PROJECT_DIR ".cache/artifacts"
+          $env:MEHDORA_QT_PREFIX = Join-Path $env:CI_PROJECT_DIR "_install"
+
+          $queryExecutable = (& ../scripts/bootstrap_qtpaths.ps1 | Select-Object -Last 1).Trim()
+          if (-not (Test-Path $queryExecutable)) {
+            throw "MEHDORA qtpaths bootstrap did not produce an executable."
+          }
+          $queryExecutableCMake = $queryExecutable.Replace("\", "/")
+          $env:KDECI_EXTRA_CMAKE_ARGS = "$env:KDECI_EXTRA_CMAKE_ARGS -DQUERY_EXECUTABLE:FILEPATH=$queryExecutableCMake"
+          Write-Host "Using protected Qt query helper: $queryExecutableCMake"
+
+          python -u krita-deps-management/ci-utilities/run-ci-build.py --project krita --branch mehdora-base --platform Windows/Qt6/Shared --only-build --skip-publishing
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Running MEHDORA Qt runtime repair V4 and retrying once."
+            & ../scripts/repair_qt_runtime.ps1
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+            Remove-Item (Join-Path $env:CI_PROJECT_DIR "_build/CMakeCache.txt") -Force -ErrorAction SilentlyContinue
+            Remove-Item (Join-Path $env:CI_PROJECT_DIR "_build/CMakeFiles") -Recurse -Force -ErrorAction SilentlyContinue
+            python -u krita-deps-management/ci-utilities/run-ci-build.py --project krita --branch mehdora-base --platform Windows/Qt6/Shared --only-build --skip-publishing
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+          python -u build-tools/ci-scripts/build-windows-package.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: MEHDORA-Textile-Studio-Windows
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            source/MEHDORA-Textile-Studio-*.zip
+            source/MEHDORA-Textile-Studio-*-setup.exe
+            source/MEHDORA-Textile-Studio-*-Setup.exe
+            source/MEHDORA-Textile-Studio-*.msix
