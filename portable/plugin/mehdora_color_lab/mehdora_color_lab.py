@@ -1,10 +1,20 @@
 from krita import Krita, DockWidget, DockWidgetFactory, DockWidgetFactoryBase
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSpinBox,
-    QMessageBox, QColorDialog, QProgressBar
-)
+try:
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtGui import QColor
+    from PyQt6.QtWidgets import (
+        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSpinBox,
+        QMessageBox, QColorDialog, QProgressBar
+    )
+    ALIGN_CENTER = Qt.AlignmentFlag.AlignCenter
+except ImportError:
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QColor
+    from PyQt5.QtWidgets import (
+        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSpinBox,
+        QMessageBox, QColorDialog, QProgressBar
+    )
+    ALIGN_CENTER = Qt.AlignCenter
 
 
 DEFAULT_TARGETS = [
@@ -102,7 +112,7 @@ class MehdoraColorLab(DockWidget):
         layout = QVBoxLayout(root)
 
         title = QLabel("TEXTILE COLOR SEPARATION")
-        title.setAlignment(Qt.AlignCenter)
+        title.setAlignment(ALIGN_CENTER)
         title.setStyleSheet("font-weight:700;font-size:14px;padding:8px;")
         layout.addWidget(title)
 
