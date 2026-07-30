@@ -1,0 +1,52 @@
+name: Build MEHDORA Standalone
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "standalone/**"
+      - ".github/workflows/build-mehdora-standalone.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-exe:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: standalone/requirements.txt
+      - name: Install build dependencies
+        run: python -m pip install -r standalone/requirements.txt
+      - name: Build independent MEHDORA
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean --windowed `
+            --name MEHDORA-Textile-Studio `
+            --collect-all PySide6 `
+            standalone/app.py
+      - name: Add documentation
+        shell: pwsh
+        run: |
+          Copy-Item standalone/README-FA.txt dist/MEHDORA-Textile-Studio/
+          Compress-Archive `
+            -Path dist/MEHDORA-Textile-Studio `
+            -DestinationPath MEHDORA-Textile-Studio-Windows.zip
+      - name: Validate package
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/MEHDORA-Textile-Studio/MEHDORA-Textile-Studio.exe")) {
+            throw "MEHDORA executable was not created."
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MEHDORA-Textile-Studio-Standalone-Windows
+          path: MEHDORA-Textile-Studio-Windows.zip
+          retention-days: 14
+          if-no-files-found: error
