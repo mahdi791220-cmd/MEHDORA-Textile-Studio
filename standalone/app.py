@@ -1,5 +1,7 @@
 import os
 import sys
+import gc
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,7 +26,9 @@ except ImportError:
         prepare_colorway,
         render_prepared_colorway,
     )
-from PySide6.QtCore import Qt, QSize, QPoint, QTimer
+from PySide6.QtCore import (
+    Qt, QSize, QPoint, QTimer, QObject, QThread, Signal, Slot
+)
 from PySide6.QtGui import (
     QAction, QColor, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap
 )
@@ -32,13 +36,13 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QColorDialog, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QListView, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QPushButton, QScrollArea, QSpinBox, QSplitter, QStatusBar, QToolBar,
+    QProgressBar, QPushButton, QScrollArea, QSpinBox, QSplitter, QStatusBar, QToolBar,
     QVBoxLayout, QWidget, QSplashScreen
 )
 
 
 APP_NAME = "MEHDORA Textile Studio"
-APP_VERSION = "0.5.1"
+APP_VERSION = "0.5.3"
 
 DEFAULT_PALETTE = [
     "#173B5F", "#168C86", "#D2A33A", "#D66B73",
@@ -69,6 +73,67 @@ class DocumentLayer:
     blend_mode: str = "normal"
     top: int = 0
     left: int = 0
+
+
+class LayeredTiffWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, filename, cache_directory):
+        super().__init__()
+        self.filename = str(filename)
+        self.cache_directory = Path(cache_directory)
+
+    @Slot()
+    def run(self):
+        try:
+            from psdtags import (
+                PsdChannelId,
+                PsdLayerFlag,
+                TiffImageSourceData,
+            )
+
+            image_source_data = TiffImageSourceData.fromtiff(self.filename)
+            layers = []
+            for index, source_layer in enumerate(image_source_data.layers):
+                height, width = source_layer.shape
+                cache_path = self.cache_directory / f"layer_{index:04d}.npy"
+                pixels = np.lib.format.open_memmap(
+                    cache_path,
+                    mode="w+",
+                    dtype=np.uint8,
+                    shape=(height, width, 4),
+                )
+                pixels[:, :, :3] = 0
+                pixels[:, :, 3] = 255
+                for channel in source_layer.channels:
+                    if channel.data is None:
+                        continue
+                    channel_id = channel.channelid
+                    if PsdChannelId.CHANNEL0 <= channel_id <= PsdChannelId.CHANNEL2:
+                        pixels[:, :, int(channel_id)] = channel.data
+                    elif channel_id == PsdChannelId.TRANSPARENCY_MASK:
+                        pixels[:, :, 3] = channel.data
+                    channel.data = None
+                pixels.flush()
+                layers.append(
+                    DocumentLayer(
+                        name=source_layer.name,
+                        rgba=pixels,
+                        visible=not bool(
+                            source_layer.flags & PsdLayerFlag.VISIBLE
+                        ),
+                        opacity=int(source_layer.opacity),
+                        blend_mode=str(source_layer.blendmode),
+                        top=int(source_layer.rectangle.top),
+                        left=int(source_layer.rectangle.left),
+                    )
+                )
+            if not layers:
+                raise ValueError("No readable Photoshop layers were found.")
+            self.finished.emit(layers)
+        except Exception as error:
+            self.failed.emit(str(error))
 
 
 def resource_path(relative_path):
@@ -526,6 +591,9 @@ class MehdoraWindow(QMainWindow):
         self.colorway_recipes = []
         self.customer_palette = []
         self.prepared_colorway = None
+        self._tiff_thread = None
+        self._tiff_worker = None
+        self._layer_cache = None
         self.build_ui()
 
     def build_ui(self):
@@ -727,6 +795,12 @@ class MehdoraWindow(QMainWindow):
             "font-weight:800;color:#D3A052;padding:5px 0;"
         )
         layout.addWidget(self.layer_status)
+        self.layer_progress = QProgressBar()
+        self.layer_progress.setRange(0, 0)
+        self.layer_progress.setTextVisible(True)
+        self.layer_progress.setFormat("Caching Photoshop layers safely…")
+        self.layer_progress.hide()
+        layout.addWidget(self.layer_progress)
         scope_row = QHBoxLayout()
         scope_row.addWidget(QLabel("Color target"))
         self.layer_scope = QComboBox()
@@ -755,6 +829,13 @@ class MehdoraWindow(QMainWindow):
         self.color_rows = []
 
     def open_image(self):
+        if self._tiff_thread is not None and self._tiff_thread.isRunning():
+            QMessageBox.information(
+                self,
+                APP_NAME,
+                "Photoshop layers are still loading. Please wait.",
+            )
+            return
         filename, _ = QFileDialog.getOpenFileName(
             self,
             "Open Textile Design",
@@ -766,10 +847,13 @@ class MehdoraWindow(QMainWindow):
         try:
             extension = Path(filename).suffix.lower()
             if extension == ".psd":
+                self.release_layer_cache()
                 rgba = self.open_layered_psd(filename)
             elif extension in (".tif", ".tiff") and self.tiff_has_layers(filename):
-                rgba = self.open_layered_tiff(filename)
+                self.open_layered_tiff_async(filename)
+                return
             else:
+                self.release_layer_cache()
                 with Image.open(filename) as image:
                     self.source_dpi = image.info.get("dpi", (300, 300))
                     rgba = np.array(image.convert("RGBA"), dtype=np.uint8)
@@ -804,48 +888,112 @@ class MehdoraWindow(QMainWindow):
         with Image.open(filename) as image:
             return 37724 in image.tag_v2
 
-    def open_layered_tiff(self, filename):
+    def open_layered_tiff_async(self, filename):
         try:
-            from psdtags import PsdLayerFlag, TiffImageSourceData
-        except ImportError as error:
-            raise RuntimeError(
-                "Layered TIFF support is not installed in this build."
-            ) from error
-
-        with Image.open(filename) as image:
-            self.source_dpi = image.info.get("dpi", (300, 300))
-            composite = np.array(image.convert("RGBA"), dtype=np.uint8)
-        image_source_data = TiffImageSourceData.fromtiff(filename)
-        layers = []
-        for source_layer in image_source_data.layers:
-            pixels = np.asarray(source_layer.asarray(), dtype=np.uint8)
-            if pixels.ndim == 2:
-                pixels = np.repeat(pixels[:, :, None], 3, axis=2)
-            if pixels.shape[2] == 3:
-                alpha = np.full(pixels.shape[:2] + (1,), 255, dtype=np.uint8)
-                pixels = np.concatenate((pixels, alpha), axis=2)
-            elif pixels.shape[2] > 4:
-                pixels = pixels[:, :, :4]
-            layers.append(
-                DocumentLayer(
-                    name=source_layer.name,
-                    rgba=np.ascontiguousarray(pixels),
-                    visible=not bool(source_layer.flags & PsdLayerFlag.VISIBLE),
-                    opacity=int(source_layer.opacity),
-                    blend_mode=str(source_layer.blendmode),
-                    top=int(source_layer.rectangle.top),
-                    left=int(source_layer.rectangle.left),
-                )
+            from psdtags import TiffImageSourceData  # noqa: F401
+        except ImportError:
+            QMessageBox.critical(
+                self,
+                APP_NAME,
+                "Layered TIFF support is not installed in this build.",
             )
-            # Release the decoded planar channels after interleaving them.
-            for channel in source_layer.channels:
-                channel.data = None
-        if not layers:
-            raise ValueError("No readable Photoshop layers were found.")
+            return
+        try:
+            with Image.open(filename) as image:
+                self.source_dpi = image.info.get("dpi", (300, 300))
+                rgba = np.array(image.convert("RGBA"), dtype=np.uint8)
+        except Exception as error:
+            QMessageBox.critical(self, APP_NAME, f"Could not open image:\n{error}")
+            return
+
+        self.release_layer_cache()
+        self._layer_cache = tempfile.TemporaryDirectory(
+            prefix="mehdora-layers-"
+        )
+        self.source_path = Path(filename)
+        # Avoid three extra 350 MB copies for print-scale TIFF documents.
+        self.original = rgba
+        self.current = rgba
+        self.layers = []
+        self.document_layers = []
+        self.document_is_layered = True
+        self.imported_layer_count = 0
+        self.clear_palette()
+        self.sources = []
+        self.colorway_recipes = []
+        self.customer_palette = []
+        self.prepared_colorway = None
+        self.colorway_list.clear()
+        self.layer_list.clear()
+        self.layer_status.setText("LAYERED TIFF — LOADING LAYERS")
+        self.layer_progress.show()
+        self.canvas.set_image(self.current)
+        self.canvas.fit()
+        height, width, _ = rgba.shape
+        self.statusBar().showMessage(
+            f"{self.source_path.name} — {width} × {height}px — "
+            "loading Photoshop layers in background"
+        )
+
+        thread = QThread(self)
+        worker = LayeredTiffWorker(filename, self._layer_cache.name)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self.on_tiff_layers_loaded)
+        worker.failed.connect(self.on_tiff_layers_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self.clear_tiff_loader)
+        thread.finished.connect(thread.deleteLater)
+        self._tiff_thread = thread
+        self._tiff_worker = worker
+        thread.start()
+
+    @Slot(object)
+    def on_tiff_layers_loaded(self, layers):
         self.document_layers = layers
         self.document_is_layered = True
         self.imported_layer_count = len(layers)
-        return composite
+        self.layer_progress.hide()
+        self.refresh_layers()
+        self.statusBar().showMessage(
+            f"{self.source_path.name} — {len(layers)} Photoshop layers ready"
+        )
+
+    @Slot(str)
+    def on_tiff_layers_failed(self, message):
+        self.layer_progress.hide()
+        self.release_layer_cache()
+        self.document_layers = [
+            DocumentLayer("Background", self.original, visible=True)
+        ]
+        self.document_is_layered = False
+        self.imported_layer_count = 0
+        self.refresh_layers()
+        QMessageBox.critical(
+            self,
+            APP_NAME,
+            f"Could not load Photoshop layers:\n{message}",
+        )
+
+    @Slot()
+    def clear_tiff_loader(self):
+        self._tiff_worker = None
+        self._tiff_thread = None
+
+    def release_layer_cache(self):
+        if self._layer_cache is None:
+            return
+        self.document_layers = []
+        gc.collect()
+        try:
+            self._layer_cache.cleanup()
+        except OSError:
+            # Windows can briefly retain a mapped handle. TemporaryDirectory
+            # will make another cleanup attempt when the object is finalized.
+            pass
+        self._layer_cache = None
 
     def open_layered_psd(self, filename):
         try:
@@ -1566,6 +1714,18 @@ class MehdoraWindow(QMainWindow):
             "<p>Independent offline textile colorway software.</p>"
             "<p>ALI AHMAD TEXTILE</p>",
         )
+
+    def closeEvent(self, event):
+        if self._tiff_thread is not None and self._tiff_thread.isRunning():
+            QMessageBox.information(
+                self,
+                APP_NAME,
+                "Photoshop layers are still loading. Please wait before closing.",
+            )
+            event.ignore()
+            return
+        self.release_layer_cache()
+        super().closeEvent(event)
 
 
 def main():
