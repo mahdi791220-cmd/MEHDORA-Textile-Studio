@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
 
 
 APP_NAME = "MEHDORA Textile Studio"
-APP_VERSION = "0.5.3"
+APP_VERSION = "0.5.4"
 
 DEFAULT_PALETTE = [
     "#173B5F", "#168C86", "#D2A33A", "#D66B73",
@@ -636,6 +636,8 @@ class MehdoraWindow(QMainWindow):
         save_action.setShortcut(QKeySequence.StandardKey.SaveAs)
         save_action.triggered.connect(self.save_as)
         file_menu.addAction(save_action)
+        file_menu.addAction("Save Layered PSD…", self.save_layered_psd_as)
+        file_menu.addAction("Save Layered TIFF…", self.save_layered_tiff_as)
         file_menu.addSeparator()
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.close)
@@ -812,7 +814,25 @@ class MehdoraWindow(QMainWindow):
         self.layer_list.setIconSize(QSize(34, 44))
         self.layer_list.itemChanged.connect(self.layer_visibility_changed)
         self.layer_list.currentItemChanged.connect(self.layer_selection_changed)
+        self.layer_list.itemDoubleClicked.connect(self.solo_selected_layer)
         layout.addWidget(self.layer_list)
+        layer_buttons = QHBoxLayout()
+        toggle_layer = QPushButton("SHOW / HIDE")
+        toggle_layer.clicked.connect(self.toggle_selected_layer)
+        layer_buttons.addWidget(toggle_layer)
+        solo_layer = QPushButton("SOLO")
+        solo_layer.clicked.connect(self.solo_selected_layer)
+        layer_buttons.addWidget(solo_layer)
+        show_all = QPushButton("SHOW ALL")
+        show_all.clicked.connect(self.show_all_layers)
+        layer_buttons.addWidget(show_all)
+        layout.addLayout(layer_buttons)
+        save_psd = QPushButton("SAVE LAYERED PSD")
+        save_psd.clicked.connect(self.save_layered_psd_as)
+        layout.addWidget(save_psd)
+        save_tiff = QPushButton("SAVE LAYERED TIFF")
+        save_tiff.clicked.connect(self.save_layered_tiff_as)
+        layout.addWidget(save_tiff)
         layout.addStretch()
         return panel
 
@@ -1347,7 +1367,10 @@ class MehdoraWindow(QMainWindow):
             pixmap = QPixmap.fromImage(
                 qimage_from_rgba(np.array(thumb, dtype=np.uint8))
             )
-            item = QListWidgetItem(QIcon(pixmap), layer.name)
+            state_icon = "👁" if layer.visible else "○"
+            item = QListWidgetItem(
+                QIcon(pixmap), f"{state_icon}  {layer.name}"
+            )
             item.setData(Qt.ItemDataRole.UserRole, index)
             item.setFlags(
                 item.flags()
@@ -1378,11 +1401,57 @@ class MehdoraWindow(QMainWindow):
         self.document_layers[index].visible = (
             item.checkState() == Qt.CheckState.Checked
         )
+        state_icon = "👁" if self.document_layers[index].visible else "○"
+        item.setText(f"{state_icon}  {self.document_layers[index].name}")
         self.current = self.compose_document_layers()
         self.canvas.set_image(self.current)
         self.statusBar().showMessage(
             f"{self.document_layers[index].name} visibility changed"
         )
+
+    def toggle_selected_layer(self):
+        item = self.layer_list.currentItem()
+        if item is None:
+            return
+        item.setCheckState(
+            Qt.CheckState.Unchecked
+            if item.checkState() == Qt.CheckState.Checked
+            else Qt.CheckState.Checked
+        )
+
+    def solo_selected_layer(self, *args):
+        index = self.active_layer_index()
+        if index is None:
+            return
+        for layer_index, layer in enumerate(self.document_layers):
+            layer.visible = layer_index == index
+        self.refresh_layers()
+        self.select_layer_index(index)
+        self.current = self.compose_document_layers()
+        self.canvas.set_image(self.current)
+        self.statusBar().showMessage(
+            f"Solo layer: {self.document_layers[index].name}"
+        )
+
+    def show_all_layers(self):
+        if not self.document_layers:
+            return
+        selected_index = self.active_layer_index()
+        for layer in self.document_layers:
+            layer.visible = True
+        self.refresh_layers()
+        if selected_index is not None:
+            self.select_layer_index(selected_index)
+        self.current = self.compose_document_layers()
+        self.canvas.set_image(self.current)
+        self.statusBar().showMessage("All layers are visible")
+
+    def select_layer_index(self, document_index):
+        for row in range(self.layer_list.count()):
+            item = self.layer_list.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) == document_index:
+                self.layer_list.setCurrentRow(row)
+                return
 
     def layer_selection_changed(self, current, previous):
         if current is None:
@@ -1499,15 +1568,31 @@ class MehdoraWindow(QMainWindow):
             QMessageBox.information(self, APP_NAME, "Nothing to save.")
             return
         stem = self.source_path.stem if self.source_path else "MEHDORA-Colorway"
+        layered = len(self.document_layers) > 1
+        default_name = (
+            f"{stem}-MEHDORA-LAYERED.psd"
+            if layered
+            else f"{stem}-MEHDORA.png"
+        )
         filename, selected = QFileDialog.getSaveFileName(
             self,
             "Save Colorway",
-            f"{stem}-MEHDORA.png",
+            default_name,
             "Photoshop PSD — Preserve Layers (*.psd);;"
-            "PNG (*.png);;TIFF (*.tif *.tiff);;JPEG (*.jpg *.jpeg)",
+            "Photoshop Layered TIFF (*.tif *.tiff);;"
+            "PNG — Flattened (*.png);;JPEG — Flattened (*.jpg *.jpeg)",
         )
         if not filename:
             return
+        path = Path(filename)
+        if selected.startswith("Photoshop PSD"):
+            filename = str(path.with_suffix(".psd"))
+        elif selected.startswith("Photoshop Layered TIFF"):
+            filename = str(path.with_suffix(".tif"))
+        elif selected.startswith("PNG"):
+            filename = str(path.with_suffix(".png"))
+        elif selected.startswith("JPEG"):
+            filename = str(path.with_suffix(".jpg"))
         try:
             extension = Path(filename).suffix.lower()
             if extension == ".psd":
@@ -1529,6 +1614,62 @@ class MehdoraWindow(QMainWindow):
             return
         self.statusBar().showMessage(f"Saved: {filename}")
 
+    def save_layered_psd_as(self):
+        if not self.document_layers:
+            QMessageBox.information(self, APP_NAME, "No layers are ready to save.")
+            return
+        stem = self.source_path.stem if self.source_path else "MEHDORA"
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Layered Photoshop Document",
+            f"{stem}-MEHDORA-LAYERED.psd",
+            "Photoshop PSD (*.psd)",
+        )
+        if not filename:
+            return
+        filename = str(Path(filename).with_suffix(".psd"))
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self.save_layered_psd(filename)
+        except Exception as error:
+            QMessageBox.critical(
+                self, APP_NAME, f"Could not save layered PSD:\n{error}"
+            )
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        QMessageBox.information(
+            self, APP_NAME, f"Layered PSD saved successfully:\n{filename}"
+        )
+
+    def save_layered_tiff_as(self):
+        if not self.document_layers:
+            QMessageBox.information(self, APP_NAME, "No layers are ready to save.")
+            return
+        stem = self.source_path.stem if self.source_path else "MEHDORA"
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Photoshop Layered TIFF",
+            f"{stem}-MEHDORA-LAYERED.tif",
+            "Photoshop Layered TIFF (*.tif *.tiff)",
+        )
+        if not filename:
+            return
+        filename = str(Path(filename).with_suffix(".tif"))
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self.save_layered_tiff(filename)
+        except Exception as error:
+            QMessageBox.critical(
+                self, APP_NAME, f"Could not save layered TIFF:\n{error}"
+            )
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        QMessageBox.information(
+            self, APP_NAME, f"Layered TIFF saved successfully:\n{filename}"
+        )
+
     def save_layered_psd(self, filename):
         try:
             from psd_tools import PSDImage
@@ -1538,7 +1679,10 @@ class MehdoraWindow(QMainWindow):
             ) from error
         if not self.document_layers:
             raise ValueError("There are no layers to save.")
-        height, width, _ = self.document_layers[0].rgba.shape
+        if self.original is not None:
+            height, width = self.original.shape[:2]
+        else:
+            height, width = self.document_layers[0].rgba.shape[:2]
         preserve_source = (
             self.source_path is not None
             and self.source_path.suffix.lower() == ".psd"
