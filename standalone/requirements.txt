@@ -4,3 +4,6 @@ numpy>=1.26,<3
 opencv-python-headless>=4.10,<5
 pyinstaller>=6.10,<7
 psd-tools>=1.17.4,<2
+psdtags>=2026.1.29,<2027
+tifffile>=2026.7.14,<2027
+imagecodecs>=2026.1.14,<2027

@@ -35,6 +35,9 @@ jobs:
             --add-data "standalone/assets;assets" `
             --collect-all PySide6 `
             --collect-all psd_tools `
+            --collect-all psdtags `
+            --collect-all tifffile `
+            --collect-all imagecodecs `
             standalone/app.py
       - name: Add documentation
         shell: pwsh

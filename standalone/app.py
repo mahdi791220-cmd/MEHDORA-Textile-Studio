@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 
 
 APP_NAME = "MEHDORA Textile Studio"
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.5.1"
 
 DEFAULT_PALETTE = [
     "#173B5F", "#168C86", "#D2A33A", "#D66B73",
@@ -67,6 +67,8 @@ class DocumentLayer:
     locked: bool = False
     opacity: int = 255
     blend_mode: str = "normal"
+    top: int = 0
+    left: int = 0
 
 
 def resource_path(relative_path):
@@ -762,8 +764,11 @@ class MehdoraWindow(QMainWindow):
         if not filename:
             return
         try:
-            if Path(filename).suffix.lower() == ".psd":
+            extension = Path(filename).suffix.lower()
+            if extension == ".psd":
                 rgba = self.open_layered_psd(filename)
+            elif extension in (".tif", ".tiff") and self.tiff_has_layers(filename):
+                rgba = self.open_layered_tiff(filename)
             else:
                 with Image.open(filename) as image:
                     self.source_dpi = image.info.get("dpi", (300, 300))
@@ -793,6 +798,54 @@ class MehdoraWindow(QMainWindow):
         self.statusBar().showMessage(
             f"{self.source_path.name} — {width} × {height}px"
         )
+
+    @staticmethod
+    def tiff_has_layers(filename):
+        with Image.open(filename) as image:
+            return 37724 in image.tag_v2
+
+    def open_layered_tiff(self, filename):
+        try:
+            from psdtags import PsdLayerFlag, TiffImageSourceData
+        except ImportError as error:
+            raise RuntimeError(
+                "Layered TIFF support is not installed in this build."
+            ) from error
+
+        with Image.open(filename) as image:
+            self.source_dpi = image.info.get("dpi", (300, 300))
+            composite = np.array(image.convert("RGBA"), dtype=np.uint8)
+        image_source_data = TiffImageSourceData.fromtiff(filename)
+        layers = []
+        for source_layer in image_source_data.layers:
+            pixels = np.asarray(source_layer.asarray(), dtype=np.uint8)
+            if pixels.ndim == 2:
+                pixels = np.repeat(pixels[:, :, None], 3, axis=2)
+            if pixels.shape[2] == 3:
+                alpha = np.full(pixels.shape[:2] + (1,), 255, dtype=np.uint8)
+                pixels = np.concatenate((pixels, alpha), axis=2)
+            elif pixels.shape[2] > 4:
+                pixels = pixels[:, :, :4]
+            layers.append(
+                DocumentLayer(
+                    name=source_layer.name,
+                    rgba=np.ascontiguousarray(pixels),
+                    visible=not bool(source_layer.flags & PsdLayerFlag.VISIBLE),
+                    opacity=int(source_layer.opacity),
+                    blend_mode=str(source_layer.blendmode),
+                    top=int(source_layer.rectangle.top),
+                    left=int(source_layer.rectangle.left),
+                )
+            )
+            # Release the decoded planar channels after interleaving them.
+            for channel in source_layer.channels:
+                channel.data = None
+        if not layers:
+            raise ValueError("No readable Photoshop layers were found.")
+        self.document_layers = layers
+        self.document_is_layered = True
+        self.imported_layer_count = len(layers)
+        return composite
 
     def open_layered_psd(self, filename):
         try:
@@ -843,6 +896,8 @@ class MehdoraWindow(QMainWindow):
                         # and blend appearance into the pixel representation.
                         opacity=255,
                         blend_mode="normal",
+                        top=0,
+                        left=0,
                     )
                 )
 
@@ -1034,8 +1089,19 @@ class MehdoraWindow(QMainWindow):
             name = f"Colorway {len(self.layers)}"
         self.current = result
         self.layers.append((name, result.copy()))
+        result_top = 0
+        result_left = 0
+        if self.layer_scope.currentIndex() == 0 and source_index is not None:
+            result_top = self.document_layers[source_index].top
+            result_left = self.document_layers[source_index].left
         self.document_layers.append(
-            DocumentLayer(name, result.copy(), visible=True)
+            DocumentLayer(
+                name,
+                result.copy(),
+                visible=True,
+                top=result_top,
+                left=result_left,
+            )
         )
         self.document_is_layered = len(self.document_layers) > 1
         self.refresh_layers()
@@ -1188,7 +1254,10 @@ class MehdoraWindow(QMainWindow):
     def compose_document_layers(self):
         if not self.document_layers:
             return self.current
-        height, width, _ = self.document_layers[0].rgba.shape
+        if self.original is not None:
+            height, width = self.original.shape[:2]
+        else:
+            height, width = self.document_layers[0].rgba.shape[:2]
         canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         for layer in self.document_layers:
             if not layer.visible:
@@ -1199,7 +1268,7 @@ class MehdoraWindow(QMainWindow):
                     lambda value, opacity=layer.opacity: value * opacity // 255
                 )
                 image.putalpha(alpha)
-            canvas.alpha_composite(image)
+            canvas.alpha_composite(image, (layer.left, layer.top))
         return np.array(canvas, dtype=np.uint8)
 
     def restore_original(self):
@@ -1295,6 +1364,11 @@ class MehdoraWindow(QMainWindow):
             extension = Path(filename).suffix.lower()
             if extension == ".psd":
                 self.save_layered_psd(filename)
+            elif (
+                extension in (".tif", ".tiff")
+                and len(self.document_layers) > 1
+            ):
+                self.save_layered_tiff(filename)
             else:
                 image = Image.fromarray(self.current, "RGBA")
                 if extension in (".jpg", ".jpeg"):
@@ -1347,12 +1421,133 @@ class MehdoraWindow(QMainWindow):
             pixel_layer = psd.create_pixel_layer(
                 Image.fromarray(layer.rgba, "RGBA"),
                 name=layer.name,
-                top=0,
-                left=0,
+                top=layer.top,
+                left=layer.left,
                 opacity=max(0, min(255, int(layer.opacity))),
             )
             pixel_layer.visible = layer.visible
         psd.save(filename)
+
+    def save_layered_tiff(self, filename):
+        try:
+            import tifffile
+            from psdtags import (
+                PsdBlendMode,
+                PsdChannel,
+                PsdChannelId,
+                PsdCompressionType,
+                PsdFormat,
+                PsdKey,
+                PsdLayer,
+                PsdLayerFlag,
+                PsdLayerMask,
+                PsdLayers,
+                PsdRectangle,
+                PsdString,
+                PsdUserMask,
+                TiffImageResources,
+                TiffImageSourceData,
+            )
+        except ImportError as error:
+            raise RuntimeError(
+                "Layered TIFF support is not installed in this build."
+            ) from error
+
+        def make_psd_layer(layer):
+            rgba = np.ascontiguousarray(layer.rgba, dtype=np.uint8)
+            flags = PsdLayerFlag.PHOTOSHOP5
+            if not layer.visible:
+                flags |= PsdLayerFlag.VISIBLE
+            return PsdLayer(
+                name=layer.name,
+                rectangle=PsdRectangle(
+                    layer.top,
+                    layer.left,
+                    layer.top + rgba.shape[0],
+                    layer.left + rgba.shape[1],
+                ),
+                channels=[
+                    PsdChannel(
+                        channelid=PsdChannelId.TRANSPARENCY_MASK,
+                        compression=PsdCompressionType.ZIP,
+                        data=rgba[:, :, 3],
+                    ),
+                    PsdChannel(
+                        channelid=PsdChannelId.CHANNEL0,
+                        compression=PsdCompressionType.ZIP,
+                        data=rgba[:, :, 0],
+                    ),
+                    PsdChannel(
+                        channelid=PsdChannelId.CHANNEL1,
+                        compression=PsdCompressionType.ZIP,
+                        data=rgba[:, :, 1],
+                    ),
+                    PsdChannel(
+                        channelid=PsdChannelId.CHANNEL2,
+                        compression=PsdCompressionType.ZIP,
+                        data=rgba[:, :, 2],
+                    ),
+                ],
+                mask=PsdLayerMask(),
+                opacity=max(0, min(255, int(layer.opacity))),
+                blendmode=PsdBlendMode.NORMAL,
+                flags=flags,
+                info=[PsdString(PsdKey.UNICODE_LAYER_NAME, layer.name)],
+            )
+
+        preserve_source = (
+            self.source_path is not None
+            and self.source_path.suffix.lower() in (".tif", ".tiff")
+            and self.source_path.exists()
+            and self.imported_layer_count > 0
+        )
+        resources = None
+        if preserve_source:
+            image_source_data = TiffImageSourceData.fromtiff(self.source_path)
+            for index, source_layer in enumerate(image_source_data.layers):
+                if index >= self.imported_layer_count:
+                    break
+                if self.document_layers[index].visible:
+                    source_layer.flags &= ~PsdLayerFlag.VISIBLE
+                else:
+                    source_layer.flags |= PsdLayerFlag.VISIBLE
+            image_source_data.layers.layers.extend(
+                make_psd_layer(layer)
+                for layer in self.document_layers[self.imported_layer_count :]
+            )
+            try:
+                resources = TiffImageResources.fromtiff(self.source_path)
+            except Exception:
+                resources = None
+        else:
+            image_source_data = TiffImageSourceData(
+                name=Path(filename).name,
+                psdformat=PsdFormat.LE32BIT,
+                layers=PsdLayers(
+                    key=PsdKey.LAYER,
+                    has_transparency=True,
+                    layers=[
+                        make_psd_layer(layer)
+                        for layer in self.document_layers
+                    ],
+                ),
+                usermask=PsdUserMask(),
+            )
+
+        composite = self.compose_document_layers()
+        extras = [image_source_data.tifftag(maxworkers=4)]
+        if resources is not None:
+            extras.append(resources.tifftag())
+        tifffile.imwrite(
+            filename,
+            composite[:, :, :3],
+            photometric="rgb",
+            compression="adobe_deflate",
+            resolution=self.source_dpi,
+            resolutionunit="inch",
+            metadata=None,
+            extratags=extras,
+        )
 
     def zoom_in(self):
         self.canvas.zoom_in()
